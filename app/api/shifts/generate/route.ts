@@ -1,0 +1,258 @@
+import Anthropic from "@anthropic-ai/sdk";
+import { NextResponse } from "next/server";
+import { SHIFT_TYPES } from "@/app/lib/types";
+
+export const runtime = "nodejs";
+
+interface StaffInput {
+  id: string;
+  name: string;
+  rank?: string | null;
+  days_off_preference?: string | null;
+  work_preference?: string | null;
+  incompatible_names?: string[];
+}
+
+interface ExistingShift {
+  staff_id: string;
+  day: number;
+  shift_type: string;
+  location?: string | null;
+}
+
+interface SiteRequirementInput {
+  shift_type: string;
+  start: string;
+  end: string;
+  count: number;
+}
+
+interface SiteInput {
+  name: string;
+  requirements?: SiteRequirementInput[] | null;
+}
+
+interface GenerateBody {
+  year: number;
+  month: number; // 1-12
+  daysInMonth: number;
+  staff: StaffInput[];
+  existing?: ExistingShift[]; // 既に入力済みのシフト（区分付き・上書きしない／続きを踏まえる）
+  sites?: SiteInput[]; // 現場マスタ（必要人数）
+  constraints?: string; // 管制員が入力する追加条件（自由記述）
+}
+
+// Claude へ渡す構造化出力スキーマ（structured outputs）
+const outputSchema = {
+  type: "object" as const,
+  additionalProperties: false,
+  required: ["shifts"],
+  properties: {
+    shifts: {
+      type: "array" as const,
+      items: {
+        type: "object" as const,
+        additionalProperties: false,
+        required: ["staff_id", "day", "shift_type", "location"],
+        properties: {
+          staff_id: { type: "string" as const },
+          day: { type: "integer" as const },
+          shift_type: { type: "string" as const, enum: [...SHIFT_TYPES] },
+          // 配置現場名。休・明休は空文字。
+          location: { type: "string" as const },
+        },
+      },
+    },
+  },
+};
+
+export async function POST(req: Request) {
+  if (!process.env.ANTHROPIC_API_KEY) {
+    return NextResponse.json(
+      {
+        error:
+          "AIシフト作成には ANTHROPIC_API_KEY の設定が必要です。.env.local に設定してください。",
+      },
+      { status: 503 }
+    );
+  }
+
+  let body: GenerateBody;
+  try {
+    body = (await req.json()) as GenerateBody;
+  } catch {
+    return NextResponse.json({ error: "リクエストの解析に失敗しました。" }, { status: 400 });
+  }
+
+  const { year, month, daysInMonth, staff, existing = [], sites = [], constraints } = body;
+  if (!year || !month || !daysInMonth || !Array.isArray(staff) || staff.length === 0) {
+    return NextResponse.json(
+      { error: "年・月・日数・隊員一覧は必須です。" },
+      { status: 400 }
+    );
+  }
+
+  const client = new Anthropic();
+
+  // 既存シフトを staff_id ごとにまとめる（プロンプト表示・上書き防止用）
+  const existingByStaff = new Map<string, ExistingShift[]>();
+  for (const e of existing) {
+    const arr = existingByStaff.get(e.staff_id) ?? [];
+    arr.push(e);
+    existingByStaff.set(e.staff_id, arr);
+  }
+
+  const staffLines = staff
+    .map((s) => {
+      const attrs: string[] = [];
+      if (s.rank) attrs.push(`区分:${s.rank}`);
+      if (s.days_off_preference) attrs.push(`休日希望:${s.days_off_preference}`);
+      if (s.work_preference) attrs.push(`出勤希望:${s.work_preference}`);
+      if (s.incompatible_names && s.incompatible_names.length > 0)
+        attrs.push(`組めない隊員:${s.incompatible_names.join("・")}`);
+      const attrText = attrs.length > 0 ? `（${attrs.join(" / ")}）` : "";
+
+      const ex = (existingByStaff.get(s.id) ?? []).sort((a, b) => a.day - b.day);
+      const exText =
+        ex.length > 0
+          ? `\n    確定済み(変更不可): ${ex
+              .map((e) => `${e.day}日=${e.shift_type}${e.location ? `(${e.location})` : ""}`)
+              .join(", ")}`
+          : "";
+      return `- ${s.name}（staff_id: ${s.id}）${attrText}${exText}`;
+    })
+    .join("\n");
+
+  // 現場ごとの1日の必要人数
+  const siteReqLines = sites
+    .filter((s) => s.requirements && s.requirements.length > 0)
+    .map(
+      (s) =>
+        `- ${s.name}: ${s
+          .requirements!.map((r) => `${r.shift_type}(${r.start}-${r.end}) ${r.count}名`)
+          .join(" / ")}`
+    )
+    .join("\n");
+  const siteNames = sites
+    .filter((s) => s.requirements && s.requirements.length > 0)
+    .map((s) => s.name);
+
+  const system = `あなたは警備会社の管制員を補助するシフト作成アシスタントです。
+与えられた隊員について、${year}年${month}月（1日〜${daysInMonth}日）の月次シフトを作成します。
+
+勤務区分は次の5種類のみ使用します: ${SHIFT_TYPES.join(" / ")}
+- 日勤: 昼間の勤務
+- 夜勤: 夜間の勤務
+- 半日: 短時間勤務
+- 休: 休日
+- 明休: 夜勤明けの休み（夜勤の翌日に割り当てる）
+
+「確定済み(変更不可)」のシフトの扱い（最重要）:
+- 既に入力済みのシフトは「確定済み」として各隊員に提示する。これらは絶対に変更せず、出力にも含めない。
+- ただし**確定済みのシフトを必ず踏まえて**、空いている日のシフトを作成すること。具体的には:
+  - 確定済みで「夜勤」の翌日が空いていれば「明休」にする。
+  - 連続勤務日数（休・明休以外の連続）は、確定済みの勤務も通算して数え、最大5日を超えないようにする。
+  - 週休（週1〜2日の休）も確定済みを含めて月全体でバランスさせる。
+  - 確定済みと矛盾しない自然な並びにする（例: 確定済みが「明休」の前日は夜勤前提で扱う）。
+
+必ず守るルール:
+1. 各隊員について、「確定済み(変更不可)」の日を除く全ての日に、いずれか1つの勤務区分を割り当てる。
+2. 「確定済み(変更不可)」の日は出力に含めない。
+3. 夜勤の翌日は必ず「明休」にする（月末日が夜勤の場合は明休は不要）。
+4. 連続勤務は確定済みも通算して最大5日まで。それを超える前に休を入れる。
+5. 各隊員に週あたり1〜2日程度の休を確保し、負担が偏らないようにする。
+
+現場の必要人数と配置（重要）:
+- 勤務する隊員（休・明休以外）には、必ず配置現場(location)を「現場の必要人数」に挙がった現場名のいずれかで割り当てる。
+- 休・明休の日は location を空文字("")にする。
+- 各日・各現場について、その現場の各勤務区分の必要人数をできるだけ満たすように配置する（例: 本社ビルが日勤2名なら、その日に日勤かつ本社ビル配置の隊員が2名になるよう割り当てる）。「確定済み」で既にその現場・区分に入っている人数も充足数に数える。
+- 隊員数が全現場の必要人数の合計に満たない日は、無理に勤務を増やさず、主要な現場（必要人数の多い現場）を優先して充足させる。
+- 必要人数を超える過剰配置は避け、余力は他現場の充足や休に回す。
+
+隊員ごとの希望・区分の扱い:
+- 「休日希望」の日はできる限り「休」にする。
+- 「出勤希望」（日勤希望・夜勤可など）を尊重する。
+- 「組めない隊員」同士は、同じ日・同じ現場・同じ勤務区分で重ならないよう配慮する。
+- 区分は「新人」は単独配置を避け「ベテラン」「隊長」と同じ現場・同日になるよう配慮し、「隊長」は平日中心に配置するなど、バランスを考慮する。`;
+
+  const userPrompt = `対象の隊員（この隊員のみシフトを作成。記載のない隊員は対象外）:
+${staffLines}
+
+${
+  siteReqLines
+    ? `現場の必要人数（毎日、各現場でこの人数を満たすことを目標にする。location はこの現場名を使う）:\n${siteReqLines}`
+    : "（必要人数が設定された現場はありません。location は空文字にしてください。）"
+}
+${constraints && constraints.trim() ? `\n管制員からの追加条件:\n${constraints.trim()}` : ""}
+
+各隊員の「確定済み(変更不可)」と現場の必要人数を踏まえ、それ以外の空いている日のシフト（勤務区分＋配置現場）を作成してください。`;
+
+  try {
+    // 出力が大きくなり得るためストリーミングで受け取りタイムアウトを回避
+    const stream = client.messages.stream({
+      model: "claude-opus-4-8",
+      max_tokens: 32000,
+      thinking: { type: "adaptive" },
+      output_config: {
+        effort: "medium",
+        format: { type: "json_schema", schema: outputSchema },
+      },
+      system,
+      messages: [{ role: "user", content: userPrompt }],
+    });
+
+    const message = await stream.finalMessage();
+
+    if (message.stop_reason === "refusal") {
+      return NextResponse.json(
+        { error: "AIがこのリクエストへの応答を拒否しました。条件を見直してください。" },
+        { status: 422 }
+      );
+    }
+
+    const textBlock = message.content.find((b) => b.type === "text");
+    if (!textBlock || textBlock.type !== "text") {
+      return NextResponse.json(
+        { error: "AIからシフトを取得できませんでした。" },
+        { status: 502 }
+      );
+    }
+
+    const parsed = JSON.parse(textBlock.text) as {
+      shifts: { staff_id: string; day: number; shift_type: string; location?: string }[];
+    };
+
+    // 念のためサーバ側で妥当性チェック
+    // （不正な staff_id / day を除外し、入力済みの日も上書きしないよう除外）
+    const validIds = new Set(staff.map((s) => s.id));
+    const shiftTypeSet = new Set<string>(SHIFT_TYPES);
+    const siteNameSet = new Set(siteNames);
+    const filledSet = new Set<string>();
+    for (const e of existing) filledSet.add(`${e.staff_id}-${e.day}`);
+    const shifts = parsed.shifts
+      .filter(
+        (s) =>
+          validIds.has(s.staff_id) &&
+          Number.isInteger(s.day) &&
+          s.day >= 1 &&
+          s.day <= daysInMonth &&
+          shiftTypeSet.has(s.shift_type) &&
+          !filledSet.has(`${s.staff_id}-${s.day}`)
+      )
+      .map((s) => {
+        // 休・明休は現場なし。勤務日はマスタに存在する現場名のみ採用。
+        const isWork = s.shift_type !== "休" && s.shift_type !== "明休";
+        const location =
+          isWork && s.location && siteNameSet.has(s.location) ? s.location : null;
+        return { staff_id: s.staff_id, day: s.day, shift_type: s.shift_type, location };
+      });
+
+    return NextResponse.json({ shifts });
+  } catch (err) {
+    const messageText = err instanceof Error ? err.message : String(err);
+    return NextResponse.json(
+      { error: `AIシフト作成に失敗しました: ${messageText}` },
+      { status: 500 }
+    );
+  }
+}

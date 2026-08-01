@@ -1,0 +1,14 @@
+# Netlify 設定（Next.js 14 App Router）
+# 公式 Next.js ランタイム（@netlify/plugin-nextjs）が
+# SSR・API ルート・middleware（Edge Functions）を自動でハンドリングします。
+
+[build]
+  command = "npm run build"
+  publish = ".next"
+
+[build.environment]
+  # Next.js 14 は Node 18.17+ 必須。20 を明示。
+  NODE_VERSION = "20"
+
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
