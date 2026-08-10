@@ -139,6 +139,20 @@ export interface SiteFormValues {
   requirements: SiteRequirement[];
 }
 
+// 勤怠（attendance テーブル）。1隊員・1日で出勤/退勤を記録。
+export interface Attendance {
+  id: string;
+  staff_id: string;
+  date: string; // YYYY-MM-DD
+  clock_in: string | null; // ISO
+  clock_out: string | null; // ISO
+  clock_in_lat: number | null;
+  clock_in_lng: number | null;
+  clock_out_lat: number | null;
+  clock_out_lng: number | null;
+  created_at: string;
+}
+
 // 日報入力フォームの値
 export interface ReportFormValues {
   staff_id: string;

@@ -5,6 +5,7 @@ const navItems = [
   { href: "/dashboard", label: "ダッシュボード" },
   { href: "/staff", label: "隊員管理" },
   { href: "/shift", label: "シフト管理" },
+  { href: "/attendance", label: "勤怠（打刻）" },
   { href: "/reports", label: "日報管理" },
   { href: "/users", label: "ユーザー管理" },
   { href: "/settings", label: "設定（現場マスタ）" },

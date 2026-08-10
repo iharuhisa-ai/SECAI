@@ -67,6 +67,21 @@ CREATE TABLE IF NOT EXISTS reports (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- 勤怠（打刻）。1隊員・1日で出勤/退勤を記録。
+CREATE TABLE IF NOT EXISTS attendance (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  staff_id UUID REFERENCES staff(id) ON DELETE CASCADE,
+  date DATE NOT NULL,
+  clock_in TIMESTAMPTZ,
+  clock_out TIMESTAMPTZ,
+  clock_in_lat DOUBLE PRECISION,
+  clock_in_lng DOUBLE PRECISION,
+  clock_out_lat DOUBLE PRECISION,
+  clock_out_lng DOUBLE PRECISION,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(staff_id, date)
+);
+
 -- プロフィール（ロール）。auth.users と1:1。
 CREATE TABLE IF NOT EXISTS profiles (
   id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -103,11 +118,12 @@ $$;
 -- 3. RLS（ロール別・推奨形）
 --    参照は全認証ユーザー / 作成・編集は管制員・管理者 / 日報は隊員が自分の分を提出可
 -- ---------------------------------------------------------------------------
-ALTER TABLE staff    ENABLE ROW LEVEL SECURITY;
-ALTER TABLE sites    ENABLE ROW LEVEL SECURITY;
-ALTER TABLE shifts   ENABLE ROW LEVEL SECURITY;
-ALTER TABLE reports  ENABLE ROW LEVEL SECURITY;
-ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE staff      ENABLE ROW LEVEL SECURITY;
+ALTER TABLE sites      ENABLE ROW LEVEL SECURITY;
+ALTER TABLE shifts     ENABLE ROW LEVEL SECURITY;
+ALTER TABLE reports    ENABLE ROW LEVEL SECURITY;
+ALTER TABLE attendance ENABLE ROW LEVEL SECURITY;
+ALTER TABLE profiles   ENABLE ROW LEVEL SECURITY;
 
 -- 再実行しても安全なよう、各ポリシーは作成前に DROP する。
 
@@ -151,6 +167,29 @@ CREATE POLICY "reports_update_staff" ON reports FOR UPDATE TO authenticated
   USING (public.app_role() IN ('管制員','管理者')) WITH CHECK (public.app_role() IN ('管制員','管理者'));
 DROP POLICY IF EXISTS "reports_delete_staff" ON reports;
 CREATE POLICY "reports_delete_staff" ON reports FOR DELETE TO authenticated
+  USING (public.app_role() IN ('管制員','管理者'));
+
+-- attendance: 参照は全員 / 隊員は自分の打刻のみ作成・更新 / 管制員・管理者は全操作
+DROP POLICY IF EXISTS "attendance_read" ON attendance;
+CREATE POLICY "attendance_read" ON attendance FOR SELECT TO authenticated USING (true);
+DROP POLICY IF EXISTS "attendance_insert_member" ON attendance;
+CREATE POLICY "attendance_insert_member" ON attendance FOR INSERT TO authenticated
+  WITH CHECK (
+    public.app_role() IN ('管制員','管理者')
+    OR staff_id = (SELECT staff_id FROM profiles WHERE id = auth.uid())
+  );
+DROP POLICY IF EXISTS "attendance_update_member" ON attendance;
+CREATE POLICY "attendance_update_member" ON attendance FOR UPDATE TO authenticated
+  USING (
+    public.app_role() IN ('管制員','管理者')
+    OR staff_id = (SELECT staff_id FROM profiles WHERE id = auth.uid())
+  )
+  WITH CHECK (
+    public.app_role() IN ('管制員','管理者')
+    OR staff_id = (SELECT staff_id FROM profiles WHERE id = auth.uid())
+  );
+DROP POLICY IF EXISTS "attendance_delete_staff" ON attendance;
+CREATE POLICY "attendance_delete_staff" ON attendance FOR DELETE TO authenticated
   USING (public.app_role() IN ('管制員','管理者'));
 
 -- ---------------------------------------------------------------------------
