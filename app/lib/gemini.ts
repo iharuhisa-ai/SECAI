@@ -1,6 +1,8 @@
 // サーバー専用。Google Gemini API を REST で呼ぶ薄いヘルパー。
 // GEMINI_API_KEY は環境変数から読む（ハードコード禁止）。
-const MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+// ローリングエイリアス（常に利用可能な最新Flash）を既定に。
+// 必要なら GEMINI_MODEL 環境変数で上書き（例: gemini-2.0-flash / gemini-pro-latest）。
+const MODEL = process.env.GEMINI_MODEL || "gemini-flash-latest";
 
 export function isGeminiConfigured(): boolean {
   return Boolean(process.env.GEMINI_API_KEY);
