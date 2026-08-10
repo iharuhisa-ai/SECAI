@@ -11,7 +11,7 @@ Supabase を設定しない場合は「デモモード」で認証不要のま�
 |------|--------|
 | GitHub リポジトリ | このプロジェクトを push |
 | Supabase プロジェクト | https://supabase.com |
-| Claude API キー | https://console.anthropic.com （AIシフト作成・日報整形に使用） |
+| Gemini API キー | https://aistudio.google.com/apikey （AIシフト作成・日報整形に使用） |
 | Netlify アカウント | https://netlify.com |
 
 必要な環境変数（3つ）:
@@ -19,7 +19,7 @@ Supabase を設定しない場合は「デモモード」で認証不要のま�
 ```
 NEXT_PUBLIC_SUPABASE_URL=https://xxxxxxxx.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOi...
-ANTHROPIC_API_KEY=sk-ant-api03-...
+GEMINI_API_KEY=...
 ```
 
 > `NEXT_PUBLIC_` の2つが揃うと認証あり本番モード、無ければデモモードになります。
@@ -67,7 +67,7 @@ ANTHROPIC_API_KEY=sk-ant-api03-...
 4. **Site configuration → Environment variables** に上記3つを登録：
    - `NEXT_PUBLIC_SUPABASE_URL`
    - `NEXT_PUBLIC_SUPABASE_ANON_KEY`（Publishable key `sb_publishable_...` でOK）
-   - `ANTHROPIC_API_KEY`（AIを使う場合。使わないなら未設定でOK）
+   - `GEMINI_API_KEY`（AIを使う場合。使わないなら未設定でOK）
 5. **Deploy site** を実行。
 6. デプロイ後、Supabase → **Authentication → URL Configuration → Site URL** を Netlify の本番URL（例 `https://your-app.netlify.app`）に設定。
 
@@ -99,14 +99,14 @@ ANTHROPIC_API_KEY=sk-ant-api03-...
 ### シフト管理（管制員）
 - [ ] セル編集・ドラッグコピー・前月コピーが保存される
 - [ ] 区分/時間の表示切替、最下部の充足状況インジケータが正しい
-- [ ] AIでシフト作成 → 生成・反映される（`ANTHROPIC_API_KEY` 設定時）
+- [ ] AIでシフト作成 → 生成・反映される（`GEMINI_API_KEY` 設定時）
 
 ### 現場マスタ（管制員）
 - [ ] 現場の追加・編集・削除、必要人数の登録が保存される
 
 ### 日報（管制員）
 - [ ] 現場単位で作成・確認・ステータス変更、PDF出力、未提出アラート（現場）
-- [ ] AIで整形が動作する（`ANTHROPIC_API_KEY` 設定時）
+- [ ] AIで整形が動作する（`GEMINI_API_KEY` 設定時）
 
 ### スマホ（隊員）
 - [ ] ヘッダーがログイン隊員名で固定表示（切替不可）
@@ -126,5 +126,5 @@ ANTHROPIC_API_KEY=sk-ant-api03-...
 |------|------|
 | ログインしてもデータが空 | RLS ポリシー未作成、または `profiles` にロール行が無い。schema.sql の実行とロール付与を確認 |
 | 隊員で日報送信が失敗 | `profiles.staff_id` が未設定。該当ユーザーに staff を紐付ける |
-| AI機能が503 | `ANTHROPIC_API_KEY` 未設定。Netlify の環境変数を確認 |
+| AI機能が503 | `GEMINI_API_KEY` 未設定。Netlify の環境変数を確認 |
 | ずっと `/login` に戻される | Cookie がブロックされている／Site URL 未設定。Supabase の URL Configuration を確認 |

@@ -1,5 +1,5 @@
-import Anthropic from "@anthropic-ai/sdk";
 import { NextResponse } from "next/server";
+import { geminiGenerate, isGeminiConfigured } from "@/app/lib/gemini";
 
 export const runtime = "nodejs";
 
@@ -10,11 +10,11 @@ interface PolishBody {
 }
 
 export async function POST(req: Request) {
-  if (!process.env.ANTHROPIC_API_KEY) {
+  if (!isGeminiConfigured()) {
     return NextResponse.json(
       {
         error:
-          "AI文章補助には ANTHROPIC_API_KEY の設定が必要です。.env.local に設定してください。",
+          "AI文章補助には GEMINI_API_KEY の設定が必要です。.env.local に設定してください。",
       },
       { status: 503 }
     );
@@ -36,8 +36,6 @@ export async function POST(req: Request) {
     );
   }
 
-  const client = new Anthropic();
-
   const system = `あなたは警備会社の日報作成を補助するアシスタントです。
 現場隊員が入力した日報の下書きを、管制員や顧客が読みやすい正式な業務報告文に整えます。
 
@@ -58,29 +56,12 @@ ${work || "（記載なし）"}
 ${notes || "（記載なし）"}`;
 
   try {
-    const message = await client.messages.create({
-      model: "claude-opus-4-8",
-      max_tokens: 2000,
+    const summary = await geminiGenerate({
       system,
-      messages: [{ role: "user", content: userPrompt }],
+      prompt: userPrompt,
+      maxOutputTokens: 2000,
     });
-
-    if (message.stop_reason === "refusal") {
-      return NextResponse.json(
-        { error: "AIがこのリクエストへの応答を拒否しました。" },
-        { status: 422 }
-      );
-    }
-
-    const textBlock = message.content.find((b) => b.type === "text");
-    if (!textBlock || textBlock.type !== "text") {
-      return NextResponse.json(
-        { error: "AIから整形結果を取得できませんでした。" },
-        { status: 502 }
-      );
-    }
-
-    return NextResponse.json({ summary: textBlock.text.trim() });
+    return NextResponse.json({ summary: summary.trim() });
   } catch (err) {
     const messageText = err instanceof Error ? err.message : String(err);
     return NextResponse.json(

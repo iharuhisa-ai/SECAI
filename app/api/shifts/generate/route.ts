@@ -1,6 +1,6 @@
-import Anthropic from "@anthropic-ai/sdk";
 import { NextResponse } from "next/server";
 import { SHIFT_TYPES } from "@/app/lib/types";
+import { geminiGenerate, isGeminiConfigured } from "@/app/lib/gemini";
 
 export const runtime = "nodejs";
 
@@ -42,36 +42,34 @@ interface GenerateBody {
   constraints?: string; // 管制員が入力する追加条件（自由記述）
 }
 
-// Claude へ渡す構造化出力スキーマ（structured outputs）
+// Gemini 構造化出力スキーマ（responseSchema 形式・型は大文字）
 const outputSchema = {
-  type: "object" as const,
-  additionalProperties: false,
-  required: ["shifts"],
+  type: "OBJECT",
   properties: {
     shifts: {
-      type: "array" as const,
+      type: "ARRAY",
       items: {
-        type: "object" as const,
-        additionalProperties: false,
-        required: ["staff_id", "day", "shift_type", "location"],
+        type: "OBJECT",
         properties: {
-          staff_id: { type: "string" as const },
-          day: { type: "integer" as const },
-          shift_type: { type: "string" as const, enum: [...SHIFT_TYPES] },
+          staff_id: { type: "STRING" },
+          day: { type: "INTEGER" },
+          shift_type: { type: "STRING", enum: [...SHIFT_TYPES] },
           // 配置現場名。休・明休は空文字。
-          location: { type: "string" as const },
+          location: { type: "STRING" },
         },
+        required: ["staff_id", "day", "shift_type", "location"],
       },
     },
   },
+  required: ["shifts"],
 };
 
 export async function POST(req: Request) {
-  if (!process.env.ANTHROPIC_API_KEY) {
+  if (!isGeminiConfigured()) {
     return NextResponse.json(
       {
         error:
-          "AIシフト作成には ANTHROPIC_API_KEY の設定が必要です。.env.local に設定してください。",
+          "AIシフト作成には GEMINI_API_KEY の設定が必要です。.env.local に設定してください。",
       },
       { status: 503 }
     );
@@ -91,8 +89,6 @@ export async function POST(req: Request) {
       { status: 400 }
     );
   }
-
-  const client = new Anthropic();
 
   // 既存シフトを staff_id ごとにまとめる（プロンプト表示・上書き防止用）
   const existingByStaff = new Map<string, ExistingShift[]>();
@@ -188,37 +184,14 @@ ${constraints && constraints.trim() ? `\n管制員からの追加条件:\n${cons
 各隊員の「確定済み(変更不可)」と現場の必要人数を踏まえ、それ以外の空いている日のシフト（勤務区分＋配置現場）を作成してください。`;
 
   try {
-    // 出力が大きくなり得るためストリーミングで受け取りタイムアウトを回避
-    const stream = client.messages.stream({
-      model: "claude-opus-4-8",
-      max_tokens: 32000,
-      thinking: { type: "adaptive" },
-      output_config: {
-        effort: "medium",
-        format: { type: "json_schema", schema: outputSchema },
-      },
+    const text = await geminiGenerate({
       system,
-      messages: [{ role: "user", content: userPrompt }],
+      prompt: userPrompt,
+      jsonSchema: outputSchema,
+      maxOutputTokens: 8192,
     });
 
-    const message = await stream.finalMessage();
-
-    if (message.stop_reason === "refusal") {
-      return NextResponse.json(
-        { error: "AIがこのリクエストへの応答を拒否しました。条件を見直してください。" },
-        { status: 422 }
-      );
-    }
-
-    const textBlock = message.content.find((b) => b.type === "text");
-    if (!textBlock || textBlock.type !== "text") {
-      return NextResponse.json(
-        { error: "AIからシフトを取得できませんでした。" },
-        { status: 502 }
-      );
-    }
-
-    const parsed = JSON.parse(textBlock.text) as {
+    const parsed = JSON.parse(text) as {
       shifts: { staff_id: string; day: number; shift_type: string; location?: string }[];
     };
 
