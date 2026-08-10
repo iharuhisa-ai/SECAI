@@ -91,6 +91,32 @@ CREATE TABLE IF NOT EXISTS profiles (
 );
 
 -- ---------------------------------------------------------------------------
+-- 1.5 既存テーブルへの不足列/制約の補完（アップグレード時・再実行対応）
+--     CREATE TABLE IF NOT EXISTS は既存テーブルに列を追加しないため、ここで補う。
+-- ---------------------------------------------------------------------------
+ALTER TABLE staff ADD COLUMN IF NOT EXISTS address VARCHAR(255);
+ALTER TABLE staff ADD COLUMN IF NOT EXISTS qualifications TEXT[];
+ALTER TABLE staff ADD COLUMN IF NOT EXISTS rank VARCHAR(20);
+ALTER TABLE staff ADD COLUMN IF NOT EXISTS days_off_preference TEXT;
+ALTER TABLE staff ADD COLUMN IF NOT EXISTS work_preference TEXT;
+ALTER TABLE staff ADD COLUMN IF NOT EXISTS incompatible_staff_ids TEXT[];
+
+ALTER TABLE sites ADD COLUMN IF NOT EXISTS address VARCHAR(255);
+ALTER TABLE sites ADD COLUMN IF NOT EXISTS note TEXT;
+ALTER TABLE sites ADD COLUMN IF NOT EXISTS requirements JSONB;
+
+ALTER TABLE reports ADD COLUMN IF NOT EXISTS ai_summary TEXT;
+ALTER TABLE reports ALTER COLUMN staff_id DROP NOT NULL;
+ALTER TABLE reports DROP CONSTRAINT IF EXISTS reports_staff_id_fkey;
+ALTER TABLE reports ADD CONSTRAINT reports_staff_id_fkey
+  FOREIGN KEY (staff_id) REFERENCES staff(id) ON DELETE SET NULL;
+
+-- 勤務区分に「受付」を含める（既存の CHECK を貼り替え）
+ALTER TABLE shifts DROP CONSTRAINT IF EXISTS shifts_shift_type_check;
+ALTER TABLE shifts ADD CONSTRAINT shifts_shift_type_check
+  CHECK (shift_type IN ('日勤', '夜勤', '受付', '半日', '休', '明休'));
+
+-- ---------------------------------------------------------------------------
 -- 2. 認証: サインアップ時に profiles を自動作成（既定ロール=隊員）
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.handle_new_user()
@@ -203,15 +229,20 @@ INSERT INTO staff (name, employee_number, department, employment_type, phone, em
 ('中村 健二', 'S005', '第一警備部', 'パート', '090-5678-9012', 'nakamura@example.com', '2023-01-15')
 ON CONFLICT (employee_number) DO NOTHING;
 
-INSERT INTO sites (name, address, note, requirements) VALUES
-('本社ビル',     '東京都千代田区丸の内 1-1-1', '常駐2名・24時間',
-  '[{"shift_type":"日勤","start":"08:00","end":"20:00","count":2},{"shift_type":"夜勤","start":"20:00","end":"08:00","count":1}]'),
-('△△工場',      '神奈川県川崎市川崎区〇〇 2-3', '夜間警備あり',
-  '[{"shift_type":"日勤","start":"08:00","end":"20:00","count":1},{"shift_type":"夜勤","start":"20:00","end":"08:00","count":2}]'),
-('□□商業施設',  '東京都豊島区東池袋 3-1', '交通誘導・土日は増員',
-  '[{"shift_type":"日勤","start":"09:00","end":"18:00","count":3}]'),
-('○○マンション', '東京都世田谷区〇〇 4-5-6', '日勤のみ',
-  '[{"shift_type":"受付","start":"08:30","end":"17:30","count":1}]');
+-- 現場サンプルは sites が空のときだけ投入（再実行しても重複しない）
+INSERT INTO sites (name, address, note, requirements)
+SELECT v.name, v.address, v.note, v.requirements::jsonb
+FROM (VALUES
+  ('本社ビル',     '東京都千代田区丸の内 1-1-1', '常駐2名・24時間',
+    '[{"shift_type":"日勤","start":"08:00","end":"20:00","count":2},{"shift_type":"夜勤","start":"20:00","end":"08:00","count":1}]'),
+  ('△△工場',      '神奈川県川崎市川崎区〇〇 2-3', '夜間警備あり',
+    '[{"shift_type":"日勤","start":"08:00","end":"20:00","count":1},{"shift_type":"夜勤","start":"20:00","end":"08:00","count":2}]'),
+  ('□□商業施設',  '東京都豊島区東池袋 3-1', '交通誘導・土日は増員',
+    '[{"shift_type":"日勤","start":"09:00","end":"18:00","count":3}]'),
+  ('○○マンション', '東京都世田谷区〇〇 4-5-6', '日勤のみ',
+    '[{"shift_type":"受付","start":"08:30","end":"17:30","count":1}]')
+) AS v(name, address, note, requirements)
+WHERE NOT EXISTS (SELECT 1 FROM sites);
 
 -- ============================================================================
 -- 実行後の設定（詳細は setup_guide.md STEP 5.5）
