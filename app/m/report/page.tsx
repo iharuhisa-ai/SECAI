@@ -5,6 +5,7 @@ import { useMobile } from "../MobileContext";
 import { isSupabaseConfigured, supabase } from "@/app/lib/supabase";
 import { generateSampleShifts } from "@/app/lib/sampleShifts";
 import { SAMPLE_SITES } from "@/app/lib/sampleSites";
+import { requestJson } from "@/app/lib/apiClient";
 import type { Site } from "@/app/lib/types";
 
 function pad(n: number) {
@@ -60,7 +61,7 @@ export default function MobileReport() {
     setPolishing(true);
     setError(null);
     try {
-      const res = await fetch("/api/reports/polish", {
+      const data = await requestJson<{ summary: string }>("/api/reports/polish", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -69,12 +70,7 @@ export default function MobileReport() {
           location,
         }),
       });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data?.error ?? "AI整形に失敗しました。");
-        return;
-      }
-      setAiSummary(data.summary as string);
+      setAiSummary(data.summary);
     } catch (err) {
       setError(err instanceof Error ? err.message : "通信エラーが発生しました。");
     } finally {

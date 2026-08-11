@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { requestJson } from "@/app/lib/apiClient";
 import type { Shift, ShiftType, Site, Staff } from "@/app/lib/types";
 
 export interface AiShift {
@@ -96,7 +97,7 @@ export default function AiShiftModal({
         .filter((s) => s.requirements && s.requirements.length > 0)
         .map((s) => ({ name: s.name, requirements: s.requirements }));
 
-      const res = await fetch("/api/shifts/generate", {
+      const data = await requestJson<{ shifts: AiShift[] }>("/api/shifts/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -118,12 +119,7 @@ export default function AiShiftModal({
           constraints,
         }),
       });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data?.error ?? "AIシフト作成に失敗しました。");
-        return;
-      }
-      setResult(data.shifts as AiShift[]);
+      setResult(data.shifts);
     } catch (err) {
       setError(err instanceof Error ? err.message : "通信エラーが発生しました。");
     } finally {

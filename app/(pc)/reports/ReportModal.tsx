@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { requestJson } from "@/app/lib/apiClient";
 import {
   REPORT_STATUSES,
   type Report,
@@ -73,7 +74,7 @@ export default function ReportModal({
     setPolishing(true);
     setError(null);
     try {
-      const res = await fetch("/api/reports/polish", {
+      const data = await requestJson<{ summary: string }>("/api/reports/polish", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -82,12 +83,7 @@ export default function ReportModal({
           location: form.location,
         }),
       });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data?.error ?? "AI文章補助に失敗しました。");
-        return;
-      }
-      update("ai_summary", data.summary as string);
+      update("ai_summary", data.summary);
     } catch (err) {
       setError(err instanceof Error ? err.message : "通信エラーが発生しました。");
     } finally {
