@@ -124,7 +124,7 @@ export default function SiteModal({ target, onClose, onSubmit }: SiteModalProps)
       onClick={onClose}
     >
       <div
-        className="w-full max-w-md overflow-y-auto rounded-lg bg-white shadow-xl"
+        className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-lg bg-white shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
