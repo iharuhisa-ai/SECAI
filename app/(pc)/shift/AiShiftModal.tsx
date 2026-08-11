@@ -38,6 +38,7 @@ export default function AiShiftModal({
   const [selectedIds, setSelectedIds] = useState<string[]>(staff.map((s) => s.id));
   const [constraints, setConstraints] = useState("");
   const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AiShift[] | null>(null);
   const [applying, setApplying] = useState(false);
@@ -78,52 +79,75 @@ export default function AiShiftModal({
     setLoading(true);
     setError(null);
     setResult(null);
+    setProgress(null);
     try {
       const selected = staff.filter((s) => selectedIds.includes(s.id));
       const selectedSet = new Set(selectedIds);
-
-      // 既に入力済みのシフト（区分・配置現場付き）。AIが続き（明休・連続勤務・必要人数の充足）を踏まえるために渡す。
-      const existing = shifts
-        .filter((sh) => sh.shift_type && selectedSet.has(sh.staff_id))
-        .map((sh) => ({
-          staff_id: sh.staff_id,
-          day: Number(sh.date.slice(8, 10)),
-          shift_type: sh.shift_type,
-          location: sh.location ?? null,
-        }));
 
       // 必要人数が設定された現場のみ渡す
       const siteReqs = sites
         .filter((s) => s.requirements && s.requirements.length > 0)
         .map((s) => ({ name: s.name, requirements: s.requirements }));
 
-      const data = await requestJson<{ shifts: AiShift[] }>("/api/shifts/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          year,
-          month,
-          daysInMonth,
-          staff: selected.map((s) => ({
-            id: s.id,
-            name: s.name,
-            rank: s.rank,
-            days_off_preference: s.days_off_preference,
-            work_preference: s.work_preference,
-            incompatible_names: (s.incompatible_staff_ids ?? [])
-              .map((id) => nameById.get(id))
-              .filter((n): n is string => Boolean(n)),
-          })),
-          existing,
-          sites: siteReqs,
-          constraints,
-        }),
-      });
-      setResult(data.shifts);
+      // 既存シフト（区分・配置現場付き）を起点に、隊員ごとに逐次生成する。
+      // 1リクエスト＝1隊員に分割することで各リクエストをタイムアウト内に収める。
+      // 生成結果を都度 existing に積み増し、後続隊員が明休・連続勤務・配置を踏まえられるようにする。
+      const accumExisting = shifts
+        .filter((sh) => sh.shift_type && selectedSet.has(sh.staff_id))
+        .map((sh) => ({
+          staff_id: sh.staff_id,
+          day: Number(sh.date.slice(8, 10)),
+          shift_type: sh.shift_type as string,
+          location: sh.location ?? null,
+        }));
+
+      const allGenerated: AiShift[] = [];
+
+      for (let i = 0; i < selected.length; i++) {
+        const s = selected[i];
+        setProgress(`${i + 1} / ${selected.length} 名を作成中...`);
+        const data = await requestJson<{ shifts: AiShift[] }>("/api/shifts/generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            year,
+            month,
+            daysInMonth,
+            staff: [
+              {
+                id: s.id,
+                name: s.name,
+                rank: s.rank,
+                days_off_preference: s.days_off_preference,
+                work_preference: s.work_preference,
+                incompatible_names: (s.incompatible_staff_ids ?? [])
+                  .map((id) => nameById.get(id))
+                  .filter((n): n is string => Boolean(n)),
+              },
+            ],
+            existing: accumExisting,
+            sites: siteReqs,
+            constraints,
+          }),
+        });
+        const gen = data.shifts ?? [];
+        allGenerated.push(...gen);
+        for (const g of gen) {
+          accumExisting.push({
+            staff_id: g.staff_id,
+            day: g.day,
+            shift_type: g.shift_type,
+            location: g.location ?? null,
+          });
+        }
+      }
+
+      setResult(allGenerated);
     } catch (err) {
       setError(err instanceof Error ? err.message : "通信エラーが発生しました。");
     } finally {
       setLoading(false);
+      setProgress(null);
     }
   };
 
@@ -237,7 +261,11 @@ export default function AiShiftModal({
               disabled={loading}
               className="mt-4 w-full rounded-md bg-slate-800 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
             >
-              {loading ? "AIが作成中...（30秒〜1分ほどかかります）" : "シフトを作成する"}
+              {loading
+                ? progress
+                  ? `AIが作成中... ${progress}`
+                  : "AIが作成中..."
+                : "シフトを作成する"}
             </button>
           )}
 

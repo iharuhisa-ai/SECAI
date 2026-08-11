@@ -250,6 +250,29 @@ export default function ShiftPage() {
     }
   };
 
+  // 当月のシフトを全削除（空にしてから作り直す用）
+  const handleClearMonth = async () => {
+    const ok = window.confirm(
+      `${year}年${month}月のシフトをすべて削除します。\nこの操作は元に戻せません。よろしいですか？`
+    );
+    if (!ok) return;
+
+    if (!isSupabaseConfigured) {
+      setShifts([]);
+      return;
+    }
+    const { error } = await supabase
+      .from("shifts")
+      .delete()
+      .gte("date", monthStart)
+      .lte("date", monthEnd);
+    if (error) {
+      alert(`削除に失敗しました: ${error.message}`);
+      return;
+    }
+    await fetchData();
+  };
+
   // 前月のシフトを当月へ一括コピー（F-11）。同じ「日」「隊員」へ複製する。
   const handleCopyPrevMonth = async () => {
     const prevYear = month === 1 ? year - 1 : year;
@@ -422,6 +445,13 @@ export default function ShiftPage() {
             className="rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-50"
           >
             {copying ? "コピー中..." : "前月をコピー"}
+          </button>
+          <button
+            onClick={handleClearMonth}
+            disabled={loading}
+            className="rounded-md border border-red-300 px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 disabled:opacity-50"
+          >
+            全削除
           </button>
           <button
             onClick={goThisMonth}
