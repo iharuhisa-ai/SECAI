@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { SHIFT_TYPES } from "@/app/lib/types";
 import { geminiGenerate, isGeminiConfigured } from "@/app/lib/gemini";
+import { WEEKDAY_LABELS, daysLabel } from "@/app/lib/requirement";
 
 export const runtime = "nodejs";
 
@@ -25,6 +26,7 @@ interface SiteRequirementInput {
   start: string;
   end: string;
   count: number;
+  days?: number[]; // 適用曜日（0=日〜6=土）。未指定=毎日
 }
 
 interface SiteInput {
@@ -119,19 +121,28 @@ export async function POST(req: Request) {
     })
     .join("\n");
 
-  // 現場ごとの1日の必要人数
+  // 現場ごとの必要人数（適用曜日付き）
   const siteReqLines = sites
     .filter((s) => s.requirements && s.requirements.length > 0)
     .map(
       (s) =>
         `- ${s.name}: ${s
-          .requirements!.map((r) => `${r.shift_type}(${r.start}-${r.end}) ${r.count}名`)
+          .requirements!.map(
+            (r) => `${r.shift_type}(${r.start}-${r.end}) ${r.count}名[${daysLabel(r.days)}]`
+          )
           .join(" / ")}`
     )
     .join("\n");
   const siteNames = sites
     .filter((s) => s.requirements && s.requirements.length > 0)
     .map((s) => s.name);
+
+  // 当月の各日の曜日（AIが曜日別の必要人数を判断するため）
+  const weekdayMap = Array.from({ length: daysInMonth }, (_, idx) => {
+    const d = idx + 1;
+    const wd = new Date(year, month - 1, d).getDay();
+    return `${d}(${WEEKDAY_LABELS[wd]})`;
+  }).join(" ");
 
   const system = `あなたは警備会社の管制員を補助するシフト作成アシスタントです。
 与えられた隊員について、${year}年${month}月（1日〜${daysInMonth}日）の月次シフトを作成します。
@@ -162,6 +173,7 @@ export async function POST(req: Request) {
 - 勤務する隊員（休・明休以外）には、必ず配置現場(location)を「現場の必要人数」に挙がった現場名のいずれかで割り当てる。
 - 休・明休の日は location を空文字("")にする。
 - 各日・各現場について、その現場の各勤務区分の必要人数をできるだけ満たすように配置する（例: 本社ビルが日勤2名なら、その日に日勤かつ本社ビル配置の隊員が2名になるよう割り当てる）。「確定済み」で既にその現場・区分に入っている人数も充足数に数える。
+- **必要人数には適用曜日がある**（[毎日]/[平日]/[土日]/[個別曜日]）。その枠は該当曜日のみ必要人数を満たせばよく、対象外の曜日はその枠の必要人数を0として扱う。
 - 隊員数が全現場の必要人数の合計に満たない日は、無理に勤務を増やさず、主要な現場（必要人数の多い現場）を優先して充足させる。
 - 必要人数を超える過剰配置は避け、余力は他現場の充足や休に回す。
 
@@ -176,7 +188,7 @@ ${staffLines}
 
 ${
   siteReqLines
-    ? `現場の必要人数（毎日、各現場でこの人数を満たすことを目標にする。location はこの現場名を使う）:\n${siteReqLines}`
+    ? `現場の必要人数（[ ]内は適用曜日。該当曜日のみ満たす。location はこの現場名を使う）:\n${siteReqLines}\n\n当月の各日の曜日:\n${weekdayMap}`
     : "（必要人数が設定された現場はありません。location は空文字にしてください。）"
 }
 ${constraints && constraints.trim() ? `\n管制員からの追加条件:\n${constraints.trim()}` : ""}

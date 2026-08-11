@@ -7,6 +7,7 @@ import { SAMPLE_STAFF } from "@/app/lib/sampleStaff";
 import { SAMPLE_REPORTS } from "@/app/lib/sampleReports";
 import { SAMPLE_SITES } from "@/app/lib/sampleSites";
 import { generateSampleShifts } from "@/app/lib/sampleShifts";
+import { reqAppliesToDay } from "@/app/lib/requirement";
 import {
   REPORT_STATUS_STYLE,
   SHIFT_PRESETS,
@@ -115,8 +116,11 @@ export default function DashboardPage() {
       assigned: number;
       required: number;
     }[] = [];
+    const todayWeekday = now.getDay();
     for (const site of sites) {
       for (const r of site.requirements ?? []) {
+        // 本日の曜日に適用される必要人数のみ対象
+        if (!reqAppliesToDay(r, todayWeekday)) continue;
         rows.push({
           site: site.name,
           shift_type: r.shift_type,

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { isSupabaseConfigured, supabase } from "@/app/lib/supabase";
 import { SAMPLE_SITES } from "@/app/lib/sampleSites";
+import { reqDaysLabel } from "@/app/lib/requirement";
 import type { Site, SiteFormValues } from "@/app/lib/types";
 import SiteModal from "./SiteModal";
 
@@ -179,7 +180,8 @@ export default function SettingsPage() {
                         {s.requirements.map((r, i) => (
                           <div key={i} className="whitespace-nowrap text-xs">
                             {r.shift_type} {r.start}-{r.end}{" "}
-                            <span className="font-medium text-slate-800">{r.count}名</span>
+                            <span className="font-medium text-slate-800">{r.count}名</span>{" "}
+                            <span className="text-slate-400">({reqDaysLabel(r)})</span>
                           </div>
                         ))}
                       </div>

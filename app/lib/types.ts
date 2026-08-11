@@ -114,6 +114,8 @@ export interface SiteRequirement {
   start: string; // HH:MM
   end: string; // HH:MM
   count: number; // 必要人数
+  // 適用する曜日（0=日〜6=土）。未指定・空・7日すべて = 毎日。
+  days?: number[];
 }
 
 // 必要人数の対象にする勤務区分（休・明休は除く）

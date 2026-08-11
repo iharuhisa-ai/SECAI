@@ -13,6 +13,7 @@ import {
   type SiteRequirement,
   type Staff,
 } from "@/app/lib/types";
+import { reqAppliesToDay, reqDaysLabel } from "@/app/lib/requirement";
 import ShiftCellEditor from "./ShiftCellEditor";
 import AiShiftModal, { type AiShift } from "./AiShiftModal";
 
@@ -666,13 +667,20 @@ export default function ShiftPage() {
                     <span className="ml-1 text-slate-500">
                       {req.shift_type} {req.count}名
                     </span>
+                    <span className="ml-1 text-slate-400">（{reqDaysLabel(req)}）</span>
                   </td>
                   {days.map((day) => {
                     const date = `${year}-${pad(month)}-${pad(day)}`;
+                    const weekday = new Date(year, month - 1, day).getDay();
+                    const applies = reqAppliesToDay(req, weekday);
                     const assigned =
                       coverageMap.get(`${date}|${site}|${req.shift_type}`) ?? 0;
-                    const cellColor =
-                      assigned < req.count
+                    // 対象外の曜日は必要人数0扱い（過剰のみ黄、通常はグレー）
+                    const cellColor = !applies
+                      ? assigned > 0
+                        ? "bg-amber-100 text-amber-700"
+                        : "bg-slate-50 text-slate-300"
+                      : assigned < req.count
                         ? "bg-red-100 text-red-700"
                         : assigned === req.count
                           ? "bg-green-100 text-green-700"
@@ -684,9 +692,9 @@ export default function ShiftPage() {
                       >
                         <div
                           className={`rounded py-1 text-[11px] font-medium ${cellColor}`}
-                          title={`${site} ${req.shift_type}: 配置${assigned} / 必要${req.count}`}
+                          title={`${site} ${req.shift_type}: 配置${assigned} / 必要${applies ? req.count : 0}`}
                         >
-                          {assigned}/{req.count}
+                          {applies ? `${assigned}/${req.count}` : assigned > 0 ? `${assigned}/0` : "–"}
                         </div>
                       </td>
                     );

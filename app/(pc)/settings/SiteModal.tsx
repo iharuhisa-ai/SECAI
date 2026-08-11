@@ -9,6 +9,7 @@ import {
   type SiteFormValues,
   type SiteRequirement,
 } from "@/app/lib/types";
+import { ALL_DAYS, WEEKDAY_LABELS } from "@/app/lib/requirement";
 
 interface SiteModalProps {
   /** 編集対象。null の場合は新規登録 */
@@ -49,10 +50,31 @@ export default function SiteModal({ target, onClose, onSubmit }: SiteModalProps)
       ...prev,
       requirements: [
         ...prev.requirements,
-        { shift_type: t, start: preset.start, end: preset.end, count: 1 },
+        { shift_type: t, start: preset.start, end: preset.end, count: 1, days: [...ALL_DAYS] },
       ],
     }));
   };
+
+  // 曜日トグル（未設定は毎日扱い）
+  const toggleReqDay = (index: number, weekday: number) =>
+    setForm((prev) => ({
+      ...prev,
+      requirements: prev.requirements.map((r, i) => {
+        if (i !== index) return r;
+        const cur = r.days && r.days.length > 0 && r.days.length < 7 ? r.days : [...ALL_DAYS];
+        const next = cur.includes(weekday)
+          ? cur.filter((d) => d !== weekday)
+          : [...cur, weekday].sort((a, b) => a - b);
+        return { ...r, days: next };
+      }),
+    }));
+
+  // 曜日プリセット（毎日/平日/土日）
+  const setReqDays = (index: number, days: number[]) =>
+    setForm((prev) => ({
+      ...prev,
+      requirements: prev.requirements.map((r, i) => (i === index ? { ...r, days } : r)),
+    }));
 
   const updateRequirement = (
     index: number,
@@ -173,52 +195,106 @@ export default function SiteModal({ target, onClose, onSubmit }: SiteModalProps)
               </p>
             ) : (
               <div className="space-y-2">
-                {form.requirements.map((r, i) => (
-                  <div key={i} className="flex items-center gap-2">
-                    <select
-                      value={r.shift_type}
-                      onChange={(e) => updateRequirement(i, "shift_type", e.target.value)}
-                      className="w-20 rounded-md border border-slate-300 px-2 py-1.5 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
+                {form.requirements.map((r, i) => {
+                  const activeDays =
+                    r.days && r.days.length > 0 && r.days.length < 7 ? r.days : ALL_DAYS;
+                  const isAll = !r.days || r.days.length === 0 || r.days.length === 7;
+                  return (
+                    <div
+                      key={i}
+                      className="space-y-2 rounded-md border border-slate-200 p-2"
                     >
-                      {STAFFING_SHIFT_TYPES.map((t) => (
-                        <option key={t} value={t}>
-                          {t}
-                        </option>
-                      ))}
-                    </select>
-                    <input
-                      type="time"
-                      value={r.start}
-                      onChange={(e) => updateRequirement(i, "start", e.target.value)}
-                      className="rounded-md border border-slate-300 px-2 py-1.5 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
-                    />
-                    <span className="text-slate-400">-</span>
-                    <input
-                      type="time"
-                      value={r.end}
-                      onChange={(e) => updateRequirement(i, "end", e.target.value)}
-                      className="rounded-md border border-slate-300 px-2 py-1.5 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
-                    />
-                    <div className="flex items-center gap-1">
-                      <input
-                        type="number"
-                        min={0}
-                        value={r.count}
-                        onChange={(e) => updateRequirement(i, "count", e.target.value)}
-                        className="w-14 rounded-md border border-slate-300 px-2 py-1.5 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
-                      />
-                      <span className="text-sm text-slate-500">名</span>
+                      <div className="flex items-center gap-2">
+                        <select
+                          value={r.shift_type}
+                          onChange={(e) => updateRequirement(i, "shift_type", e.target.value)}
+                          className="w-20 rounded-md border border-slate-300 px-2 py-1.5 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
+                        >
+                          {STAFFING_SHIFT_TYPES.map((t) => (
+                            <option key={t} value={t}>
+                              {t}
+                            </option>
+                          ))}
+                        </select>
+                        <input
+                          type="time"
+                          value={r.start}
+                          onChange={(e) => updateRequirement(i, "start", e.target.value)}
+                          className="rounded-md border border-slate-300 px-2 py-1.5 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
+                        />
+                        <span className="text-slate-400">-</span>
+                        <input
+                          type="time"
+                          value={r.end}
+                          onChange={(e) => updateRequirement(i, "end", e.target.value)}
+                          className="rounded-md border border-slate-300 px-2 py-1.5 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
+                        />
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="number"
+                            min={0}
+                            value={r.count}
+                            onChange={(e) => updateRequirement(i, "count", e.target.value)}
+                            className="w-14 rounded-md border border-slate-300 px-2 py-1.5 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
+                          />
+                          <span className="text-sm text-slate-500">名</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => removeRequirement(i)}
+                          className="ml-auto text-slate-400 hover:text-red-500"
+                          aria-label="削除"
+                        >
+                          ✕
+                        </button>
+                      </div>
+
+                      {/* 曜日別の適用 */}
+                      <div className="flex flex-wrap items-center gap-1.5 pl-0.5">
+                        <span className="text-xs text-slate-500">曜日:</span>
+                        {WEEKDAY_LABELS.map((label, wd) => {
+                          const on = isAll || activeDays.includes(wd);
+                          return (
+                            <button
+                              key={wd}
+                              type="button"
+                              onClick={() => toggleReqDay(i, wd)}
+                              className={`h-6 w-6 rounded text-xs font-medium transition ${
+                                on
+                                  ? "bg-slate-800 text-white"
+                                  : "border border-slate-300 text-slate-400 hover:bg-slate-100"
+                              } ${wd === 0 ? "text-red-100" : ""}`}
+                            >
+                              {label}
+                            </button>
+                          );
+                        })}
+                        <span className="mx-1 text-slate-200">|</span>
+                        <button
+                          type="button"
+                          onClick={() => setReqDays(i, [...ALL_DAYS])}
+                          className="rounded px-1.5 py-0.5 text-xs text-slate-500 underline hover:text-slate-800"
+                        >
+                          毎日
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setReqDays(i, [1, 2, 3, 4, 5])}
+                          className="rounded px-1.5 py-0.5 text-xs text-slate-500 underline hover:text-slate-800"
+                        >
+                          平日
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setReqDays(i, [0, 6])}
+                          className="rounded px-1.5 py-0.5 text-xs text-slate-500 underline hover:text-slate-800"
+                        >
+                          土日
+                        </button>
+                      </div>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => removeRequirement(i)}
-                      className="ml-auto text-slate-400 hover:text-red-500"
-                      aria-label="削除"
-                    >
-                      ✕
-                    </button>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>

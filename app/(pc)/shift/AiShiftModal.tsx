@@ -38,7 +38,7 @@ export default function AiShiftModal({
   const [selectedIds, setSelectedIds] = useState<string[]>(staff.map((s) => s.id));
   const [constraints, setConstraints] = useState("");
   const [loading, setLoading] = useState(false);
-  const [progress, setProgress] = useState<string | null>(null);
+  const [progress, setProgress] = useState<{ current: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AiShift[] | null>(null);
   const [applying, setApplying] = useState(false);
@@ -105,7 +105,7 @@ export default function AiShiftModal({
 
       for (let i = 0; i < selected.length; i++) {
         const s = selected[i];
-        setProgress(`${i + 1} / ${selected.length} 名を作成中...`);
+        setProgress({ current: i + 1, total: selected.length });
         const data = await requestJson<{ shifts: AiShift[] }>("/api/shifts/generate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -190,6 +190,35 @@ export default function AiShiftModal({
         </div>
 
         <div className="flex-1 overflow-y-auto px-6 py-5">
+          {loading ? (
+            <div className="flex flex-col items-center justify-center gap-6 py-16 text-center">
+              <div className="relative flex h-20 w-20 items-center justify-center">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-indigo-400/25" />
+                <span className="absolute h-20 w-20 animate-spin rounded-full border-4 border-slate-200 border-t-indigo-600" />
+                <span className="text-3xl">✨</span>
+              </div>
+              <div>
+                <p className="text-base font-bold text-slate-800">AIがシフトを作成しています</p>
+                <p className="mt-1 text-sm text-slate-500">
+                  {progress ? `${progress.current} / ${progress.total} 名` : "準備中..."}
+                </p>
+              </div>
+              {progress && (
+                <div className="h-2 w-full max-w-xs overflow-hidden rounded-full bg-slate-100">
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-sky-500 to-indigo-600 transition-all duration-500"
+                    style={{
+                      width: `${Math.round(((progress.current - 1) / progress.total) * 100)}%`,
+                    }}
+                  />
+                </div>
+              )}
+              <p className="text-xs text-slate-400">
+                各隊員の勤務を順に組み立てています。しばらくお待ちください。
+              </p>
+            </div>
+          ) : (
+          <>
           <p className="mb-3 text-sm text-slate-600">
             勤務区分（日勤・夜勤・半日・休・明休）を、各隊員の区分・希望と
             <span className="font-medium text-slate-700">現場の必要人数</span>
@@ -261,11 +290,7 @@ export default function AiShiftModal({
               disabled={loading}
               className="mt-4 w-full rounded-md bg-slate-800 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
             >
-              {loading
-                ? progress
-                  ? `AIが作成中... ${progress}`
-                  : "AIが作成中..."
-                : "シフトを作成する"}
+              シフトを作成する
             </button>
           )}
 
@@ -278,6 +303,8 @@ export default function AiShiftModal({
               <span className="font-medium">{result.length} 件</span>{" "}
               のシフト案を作成しました。「当月へ反映」を押すと、空いている日にのみ反映されます（既存は保持）。
             </div>
+          )}
+          </>
           )}
         </div>
 
