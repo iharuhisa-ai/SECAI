@@ -20,6 +20,8 @@ interface ExistingShift {
   day: number;
   shift_type: string;
   location?: string | null;
+  start?: string | null; // HH:MM（時間帯別の充足判断用）
+  end?: string | null;
 }
 
 interface SiteRequirementInput {
@@ -59,8 +61,11 @@ const outputSchema = {
           shift_type: { type: "STRING", enum: [...SHIFT_TYPES] },
           // 配置現場名。休・明休は空文字。
           location: { type: "STRING" },
+          // 配置する時間帯。現場マスタの枠に合わせる（HH:MM）。休・明休は空文字。
+          start: { type: "STRING" },
+          end: { type: "STRING" },
         },
-        required: ["staff_id", "day", "shift_type", "location"],
+        required: ["staff_id", "day", "shift_type", "location", "start", "end"],
       },
     },
   },
@@ -115,7 +120,10 @@ export async function POST(req: Request) {
       const exText =
         ex.length > 0
           ? `\n    確定済み(変更不可): ${ex
-              .map((e) => `${e.day}日=${e.shift_type}${e.location ? `(${e.location})` : ""}`)
+              .map((e) => {
+                const band = e.start && e.end ? ` ${e.start}-${e.end}` : "";
+                return `${e.day}日=${e.shift_type}${e.location ? `(${e.location}${band})` : ""}`;
+              })
               .join(", ")}`
           : "";
       return `- ${s.name}（staff_id: ${s.id}）${attrText}${exText}`;
@@ -137,6 +145,18 @@ export async function POST(req: Request) {
   const siteNames = sites
     .filter((s) => s.requirements && s.requirements.length > 0)
     .map((s) => s.name);
+
+  // 現場×勤務区分 → 登録された時間帯（枠）の一覧。時間帯別の配置・照合に使う。
+  const normTime = (t?: string | null) => (t ?? "").slice(0, 5);
+  const slotsByLocType = new Map<string, { start: string; end: string }[]>();
+  for (const site of sites) {
+    for (const r of site.requirements ?? []) {
+      const k = `${site.name}|${r.shift_type}`;
+      const arr = slotsByLocType.get(k) ?? [];
+      arr.push({ start: normTime(r.start), end: normTime(r.end) });
+      slotsByLocType.set(k, arr);
+    }
+  }
 
   // 当月の各日の曜日と祝日（AIが曜日別の必要人数を判断するため）
   const holidays = japaneseHolidays(year);
@@ -175,8 +195,14 @@ export async function POST(req: Request) {
 
 現場の必要人数と配置（重要）:
 - 勤務する隊員（休・明休以外）には、必ず配置現場(location)を「現場の必要人数」に挙がった現場名のいずれかで割り当てる。
-- 休・明休の日は location を空文字("")にする。
+- 休・明休の日は location・start・end をすべて空文字("")にする。
 - 各日・各現場について、その現場の各勤務区分の必要人数をできるだけ満たすように配置する（例: 本社ビルが日勤2名なら、その日に日勤かつ本社ビル配置の隊員が2名になるよう割り当てる）。「確定済み」で既にその現場・区分に入っている人数も充足数に数える。
+
+時間帯(start・end)の扱い（重要）:
+- 勤務する隊員には、配置現場の「必要人数」に挙がった時間帯(◯◯-◯◯)のいずれかを start・end として必ず出力する（例: 日勤(08:00-20:00) の枠に入れるなら start="08:00" end="20:00"）。
+- **同じ現場・同じ勤務区分でも時間帯が複数ある場合は、それぞれ別の枠として扱い、時間帯ごとに必要人数を満たす**（例: 受付(08:00-12:00)1名 と 受付(13:00-17:00)1名 があれば、両方の時間帯にそれぞれ1名ずつ配置する）。1つの時間帯に偏らせない。
+- 充足数は「現場・勤務区分・時間帯」の組み合わせごとに数える。「確定済み」も同じ時間帯のものだけを充足数に数える。
+- start・end は必ず必要人数に登録された時間帯のいずれかと完全に一致させる（独自の時刻を作らない）。
 - **必要人数には適用曜日がある**（[毎日]/[平日]/[土日]/[個別曜日]）。その枠は該当曜日のみ必要人数を満たせばよく、対象外の曜日はその枠の必要人数を0として扱う。
 - **祝日（「・祝」付きの日）は日曜と同じ扱い**にする。「土日」枠には祝日も含め、「平日」枠には祝日を含めない。
 - 隊員数が全現場の必要人数の合計に満たない日は、無理に勤務を増やさず、主要な現場（必要人数の多い現場）を優先して充足させる。
@@ -209,7 +235,14 @@ ${constraints && constraints.trim() ? `\n管制員からの追加条件:\n${cons
     });
 
     const parsed = JSON.parse(text) as {
-      shifts: { staff_id: string; day: number; shift_type: string; location?: string }[];
+      shifts: {
+        staff_id: string;
+        day: number;
+        shift_type: string;
+        location?: string;
+        start?: string;
+        end?: string;
+      }[];
     };
 
     // 念のためサーバ側で妥当性チェック
@@ -234,7 +267,23 @@ ${constraints && constraints.trim() ? `\n管制員からの追加条件:\n${cons
         const isWork = s.shift_type !== "休" && s.shift_type !== "明休";
         const location =
           isWork && s.location && siteNameSet.has(s.location) ? s.location : null;
-        return { staff_id: s.staff_id, day: s.day, shift_type: s.shift_type, location };
+
+        // 時間帯: マスタの枠に照合して確定する。
+        // AIの提示が枠に一致すればそれを、なければ最初の枠を採用（区分単位のフォールバック）。
+        let start: string | null = null;
+        let end: string | null = null;
+        if (isWork && location) {
+          const slots = slotsByLocType.get(`${location}|${s.shift_type}`) ?? [];
+          if (slots.length > 0) {
+            const matched = slots.find(
+              (sl) => sl.start === normTime(s.start) && sl.end === normTime(s.end)
+            );
+            const chosen = matched ?? slots[0];
+            start = chosen.start;
+            end = chosen.end;
+          }
+        }
+        return { staff_id: s.staff_id, day: s.day, shift_type: s.shift_type, location, start, end };
       });
 
     return NextResponse.json({ shifts });

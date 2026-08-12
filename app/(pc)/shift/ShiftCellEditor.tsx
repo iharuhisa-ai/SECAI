@@ -80,13 +80,20 @@ export default function ShiftCellEditor({
     return SHIFT_TYPES.filter((t) => base.has(t));
   }, [currentSiteReqs, form.shift_type]);
 
-  // 勤務区分を選ぶと、その現場に登録された時刻（無ければ既定）を補完する
+  // 勤務区分を選ぶと、その現場に登録された時刻（無ければ既定）を補完する。
+  // 同じ区分に時間帯が複数あれば最初の枠を既定にする（下の「時間帯」で切替可能）。
   const selectType = (type: ShiftType) => {
     const req = currentSiteReqs.find((r) => r.shift_type === type);
     const start = req ? req.start : SHIFT_PRESETS[type].start;
     const end = req ? req.end : SHIFT_PRESETS[type].end;
     setForm((prev) => ({ ...prev, shift_type: type, start_time: start, end_time: end }));
   };
+
+  // 選択中の区分に登録された時間帯枠（2つ以上あれば時間帯を選べるようにする）
+  const slotsForType = useMemo(
+    () => currentSiteReqs.filter((r) => r.shift_type === form.shift_type),
+    [currentSiteReqs, form.shift_type]
+  );
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -198,6 +205,37 @@ export default function ShiftCellEditor({
                 : "現場を選ぶと、その現場に登録された勤務区分が表示されます。"}
             </span>
           </div>
+
+          {slotsForType.length > 1 && (
+            <div>
+              <span className="mb-1.5 block text-sm font-medium text-slate-700">時間帯</span>
+              <div className="flex flex-wrap gap-2">
+                {slotsForType.map((r, i) => {
+                  const active = form.start_time === r.start && form.end_time === r.end;
+                  return (
+                    <button
+                      key={`${r.start}-${r.end}-${i}`}
+                      type="button"
+                      onClick={() =>
+                        setForm((prev) => ({ ...prev, start_time: r.start, end_time: r.end }))
+                      }
+                      className={`rounded-md px-3 py-2 text-sm font-medium transition ${
+                        active
+                          ? "bg-slate-800 text-white"
+                          : "border border-slate-300 text-slate-600 hover:bg-slate-100"
+                      }`}
+                    >
+                      {r.start}–{r.end}
+                      <span className="ml-1 text-xs opacity-70">{r.count}名</span>
+                    </button>
+                  );
+                })}
+              </div>
+              <span className="mt-1 block text-xs text-slate-400">
+                この区分は時間帯が複数あります。配置する時間帯を選んでください。
+              </span>
+            </div>
+          )}
 
           <div className="grid grid-cols-2 gap-4">
             <label className="block">

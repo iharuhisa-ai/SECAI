@@ -9,6 +9,8 @@ export interface AiShift {
   day: number;
   shift_type: ShiftType;
   location?: string | null;
+  start?: string | null; // HH:MM（現場マスタの時間帯枠に一致）
+  end?: string | null;
 }
 
 interface AiShiftModalProps {
@@ -99,6 +101,8 @@ export default function AiShiftModal({
           day: Number(sh.date.slice(8, 10)),
           shift_type: sh.shift_type as string,
           location: sh.location ?? null,
+          start: (sh.start_time ?? "").slice(0, 5) || null,
+          end: (sh.end_time ?? "").slice(0, 5) || null,
         }));
 
       const allGenerated: AiShift[] = [];
@@ -138,6 +142,8 @@ export default function AiShiftModal({
             day: g.day,
             shift_type: g.shift_type,
             location: g.location ?? null,
+            start: g.start ?? null,
+            end: g.end ?? null,
           });
         }
       }
@@ -222,7 +228,9 @@ export default function AiShiftModal({
           <p className="mb-3 text-sm text-slate-600">
             勤務区分（日勤・夜勤・半日・休・明休）を、各隊員の区分・希望と
             <span className="font-medium text-slate-700">現場の必要人数</span>
-            を踏まえて作成し、勤務日には配置現場も割り当てます。
+            を踏まえて作成し、勤務日には配置現場と
+            <span className="font-medium text-slate-700">時間帯</span>
+            を割り当てます（同じ区分でも時間帯ごとに必要人数を満たします）。
             <span className="font-medium text-slate-700">既に入力済みのシフトは上書きしません。</span>
             {sitesWithReq === 0 && (
               <span className="mt-1 block text-xs text-amber-700">

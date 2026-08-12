@@ -195,16 +195,41 @@ export default function ShiftPage() {
     return rows;
   }, [sites]);
 
-  // 日付×現場×区分 ごとの配置人数（`${date}|${location}|${shift_type}` → 人数）
-  const coverageMap = useMemo(() => {
-    const m = new Map<string, number>();
+  // 配置人数の索引。区分単位と時間帯単位の2種類を作る。
+  // - byType: `${date}|${location}|${shift_type}` → 人数
+  // - byBand: `${date}|${location}|${shift_type}|${start}|${end}` → 人数（時間帯別）
+  const { coverageByType, coverageByBand } = useMemo(() => {
+    const byType = new Map<string, number>();
+    const byBand = new Map<string, number>();
     for (const s of shifts) {
       if (!s.shift_type || !s.location) continue;
-      const k = `${s.date}|${s.location}|${s.shift_type}`;
-      m.set(k, (m.get(k) ?? 0) + 1);
+      const tk = `${s.date}|${s.location}|${s.shift_type}`;
+      byType.set(tk, (byType.get(tk) ?? 0) + 1);
+      const st = (s.start_time ?? "").slice(0, 5);
+      const en = (s.end_time ?? "").slice(0, 5);
+      const bk = `${tk}|${st}|${en}`;
+      byBand.set(bk, (byBand.get(bk) ?? 0) + 1);
     }
-    return m;
+    return { coverageByType: byType, coverageByBand: byBand };
   }, [shifts]);
+
+  // 同一(現場×区分)に時間帯枠が2つ以上ある組み合わせ。
+  // このときだけ充足カウントを時間帯別（byBand）で行い、
+  // 1枠のみ（デモや通常運用）は従来どおり区分単位（byType）で数える＝後方互換。
+  const multiSlotSet = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const site of sites) {
+      for (const r of site.requirements ?? []) {
+        const k = `${site.name}|${r.shift_type}`;
+        counts.set(k, (counts.get(k) ?? 0) + 1);
+      }
+    }
+    const set = new Set<string>();
+    counts.forEach((c, k) => {
+      if (c > 1) set.add(k);
+    });
+    return set;
+  }, [sites]);
 
   // 保存済みの順序を反映した表示用の行リスト
   const orderedStaff = useMemo(
@@ -453,12 +478,13 @@ export default function ShiftPage() {
     const records = aiShifts
       .map((s) => {
         const preset = SHIFT_PRESETS[s.shift_type];
+        // 時間帯は AI が現場マスタの枠に合わせて返す。無ければ区分の既定時刻。
         return {
           staff_id: s.staff_id,
           date: `${year}-${pad(month)}-${pad(s.day)}`,
           shift_type: s.shift_type,
-          start_time: preset.start || null,
-          end_time: preset.end || null,
+          start_time: (s.start || preset.start) || null,
+          end_time: (s.end || preset.end) || null,
           location: s.location || null,
           note: null as string | null,
         };
@@ -854,8 +880,13 @@ export default function ShiftPage() {
                     const date = `${year}-${pad(month)}-${pad(day)}`;
                     const weekday = new Date(year, month - 1, day).getDay();
                     const applies = reqAppliesToDay(req, weekday, holidays.has(date));
-                    const assigned =
-                      coverageMap.get(`${date}|${site}|${req.shift_type}`) ?? 0;
+                    // 時間帯枠が複数ある(現場×区分)は時間帯別、それ以外は区分単位で数える
+                    const multi = multiSlotSet.has(`${site}|${req.shift_type}`);
+                    const assigned = multi
+                      ? coverageByBand.get(
+                          `${date}|${site}|${req.shift_type}|${req.start}|${req.end}`
+                        ) ?? 0
+                      : coverageByType.get(`${date}|${site}|${req.shift_type}`) ?? 0;
                     // 対象外の曜日は必要人数0扱い（過剰のみ黄、通常はグレー）
                     const cellColor = !applies
                       ? assigned > 0
