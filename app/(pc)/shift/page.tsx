@@ -27,6 +27,40 @@ function shiftKey(staffId: string, date: string): string {
   return `${staffId}__${date}`;
 }
 
+// 行の並べ替え順を保存する localStorage キー（月に依存しない）
+const STAFF_ORDER_KEY = "secai.shift.staffOrder";
+const REQ_ORDER_KEY = "secai.shift.reqOrder";
+
+// 充足状況の1行（現場×必要人数）を一意に表すキー
+function reqRowKey(site: string, req: SiteRequirement): string {
+  return `${site}|${req.shift_type}|${req.start}|${req.end}|${(req.days ?? []).join(",")}`;
+}
+
+// 配列の from 番目を to 番目へ移動した新配列を返す
+function reorder<T>(arr: T[], from: number, to: number): T[] {
+  const next = arr.slice();
+  const [item] = next.splice(from, 1);
+  next.splice(to, 0, item);
+  return next;
+}
+
+// 保存済みの順序（keyの配列）に従って items を並べ替える。
+// 順序に無い項目は元の並びのまま末尾に付く（Array.sort は安定ソート）。
+function applyOrder<T>(items: T[], order: string[], keyFn: (item: T) => string): T[] {
+  const pos = new Map(order.map((k, i) => [k, i]));
+  return items
+    .slice()
+    .sort((a, b) => (pos.get(keyFn(a)) ?? Infinity) - (pos.get(keyFn(b)) ?? Infinity));
+}
+
+function persistOrder(key: string, arr: string[]): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(arr));
+  } catch {
+    /* localStorage 不可でも無視 */
+  }
+}
+
 // フォーム入力を shifts テーブルのカラムへ変換
 function toRecord(values: ShiftFormValues, staffId: string, date: string) {
   return {
@@ -72,6 +106,25 @@ export default function ShiftPage() {
 
   // 表示モード: 勤務区分 / 時間
   const [viewMode, setViewMode] = useState<"type" | "time">("type");
+
+  // 行の並べ替え（隊員行・充足状況行）。順序は localStorage に保持。
+  type RowKind = "staff" | "req";
+  const [staffOrder, setStaffOrder] = useState<string[]>([]);
+  const [reqOrder, setReqOrder] = useState<string[]>([]);
+  const [rowDrag, setRowDrag] = useState<{ kind: RowKind; index: number } | null>(null);
+  const [rowDragOver, setRowDragOver] = useState<{ kind: RowKind; index: number } | null>(null);
+
+  // 保存済みの並べ替え順を初回に復元
+  useEffect(() => {
+    try {
+      const s = localStorage.getItem(STAFF_ORDER_KEY);
+      if (s) setStaffOrder(JSON.parse(s));
+      const r = localStorage.getItem(REQ_ORDER_KEY);
+      if (r) setReqOrder(JSON.parse(r));
+    } catch {
+      /* 破損時は既定順のまま */
+    }
+  }, []);
 
   const daysInMonth = useMemo(() => new Date(year, month, 0).getDate(), [year, month]);
   const days = useMemo(
@@ -152,6 +205,34 @@ export default function ShiftPage() {
     }
     return m;
   }, [shifts]);
+
+  // 保存済みの順序を反映した表示用の行リスト
+  const orderedStaff = useMemo(
+    () => applyOrder(staffList, staffOrder, (s) => s.id),
+    [staffList, staffOrder]
+  );
+  const orderedRequirementRows = useMemo(
+    () => applyOrder(requirementRows, reqOrder, (r) => reqRowKey(r.site, r.req)),
+    [requirementRows, reqOrder]
+  );
+
+  // 行のドラッグ並べ替えを確定
+  const handleStaffReorder = (from: number, to: number) => {
+    setRowDrag(null);
+    setRowDragOver(null);
+    if (from === to) return;
+    const ids = reorder(orderedStaff, from, to).map((s) => s.id);
+    setStaffOrder(ids);
+    persistOrder(STAFF_ORDER_KEY, ids);
+  };
+  const handleReqReorder = (from: number, to: number) => {
+    setRowDrag(null);
+    setRowDragOver(null);
+    if (from === to) return;
+    const keys = reorder(orderedRequirementRows, from, to).map((r) => reqRowKey(r.site, r.req));
+    setReqOrder(keys);
+    persistOrder(REQ_ORDER_KEY, keys);
+  };
 
   const goPrevMonth = () => {
     if (month === 1) {
@@ -432,7 +513,7 @@ export default function ShiftPage() {
           <p className="mt-1 text-sm text-slate-500">
             {loading
               ? "読み込み中..."
-              : `在籍 ${staffList.length} 名・クリックで編集／ドラッグ＆ドロップで勤務をコピー`}
+              : `在籍 ${staffList.length} 名・クリックで編集／セルのドラッグで勤務をコピー／左の ⠿ で行を並べ替え`}
           </p>
         </div>
 
@@ -571,13 +652,55 @@ export default function ShiftPage() {
               </tr>
             )}
 
-            {staffList.map((staff) => (
+            {orderedStaff.map((staff, i) => (
               <tr key={staff.id} className="hover:bg-slate-50/50">
-                <td className="sticky left-0 z-10 border-r border-slate-200 bg-white px-3 py-2 font-medium text-slate-800">
-                  {staff.name}
-                  <span className="ml-1 font-mono text-xs text-slate-400">
-                    {staff.employee_number}
-                  </span>
+                <td
+                  className={`sticky left-0 z-10 border-r border-slate-200 bg-white px-2 py-2 font-medium text-slate-800 ${
+                    rowDragOver?.kind === "staff" && rowDragOver.index === i
+                      ? "border-t-2 border-t-slate-800"
+                      : ""
+                  }`}
+                  onDragOver={(e) => {
+                    if (rowDrag?.kind !== "staff") return;
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = "move";
+                    setRowDragOver({ kind: "staff", index: i });
+                  }}
+                  onDragLeave={() =>
+                    setRowDragOver((o) =>
+                      o?.kind === "staff" && o.index === i ? null : o
+                    )
+                  }
+                  onDrop={(e) => {
+                    if (rowDrag?.kind !== "staff") return;
+                    e.preventDefault();
+                    handleStaffReorder(rowDrag.index, i);
+                  }}
+                >
+                  <div className="flex items-center gap-1.5">
+                    <span
+                      draggable
+                      onDragStart={(e) => {
+                        setRowDrag({ kind: "staff", index: i });
+                        e.dataTransfer.effectAllowed = "move";
+                        e.dataTransfer.setData("text/plain", "row");
+                      }}
+                      onDragEnd={() => {
+                        setRowDrag(null);
+                        setRowDragOver(null);
+                      }}
+                      title="ドラッグして並べ替え"
+                      className="cursor-grab select-none leading-none text-slate-300 hover:text-slate-500 active:cursor-grabbing"
+                    >
+                      ⠿
+                    </span>
+                    <span className="truncate">
+                      {staff.name}
+                      <span className="ml-1 font-mono text-xs text-slate-400">
+                        {staff.employee_number}
+                      </span>
+                    </span>
+                  </div>
                 </td>
                 {days.map((day) => {
                   const date = `${year}-${pad(month)}-${pad(day)}`;
@@ -670,14 +793,62 @@ export default function ShiftPage() {
                   <span className="rounded bg-amber-100 px-1.5 text-amber-700">過剰</span>
                 </td>
               </tr>
-              {requirementRows.map(({ site, req }, ri) => (
-                <tr key={`${site}-${req.shift_type}-${ri}`} className="hover:bg-slate-50/50">
-                  <td className="sticky left-0 z-10 border-r border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-700">
-                    <span className="font-medium">{site}</span>
-                    <span className="ml-1 text-slate-500">
-                      {req.shift_type} {req.count}名
-                    </span>
-                    <span className="ml-1 text-slate-400">（{reqDaysLabel(req)}）</span>
+              {orderedRequirementRows.map(({ site, req }, ri) => (
+                <tr key={reqRowKey(site, req)} className="hover:bg-slate-50/50">
+                  <td
+                    className={`sticky left-0 z-10 border-r border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700 ${
+                      rowDragOver?.kind === "req" && rowDragOver.index === ri
+                        ? "border-t-2 border-t-slate-800"
+                        : ""
+                    }`}
+                    onDragOver={(e) => {
+                      if (rowDrag?.kind !== "req") return;
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = "move";
+                      setRowDragOver({ kind: "req", index: ri });
+                    }}
+                    onDragLeave={() =>
+                      setRowDragOver((o) =>
+                        o?.kind === "req" && o.index === ri ? null : o
+                      )
+                    }
+                    onDrop={(e) => {
+                      if (rowDrag?.kind !== "req") return;
+                      e.preventDefault();
+                      handleReqReorder(rowDrag.index, ri);
+                    }}
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <span
+                        draggable
+                        onDragStart={(e) => {
+                          setRowDrag({ kind: "req", index: ri });
+                          e.dataTransfer.effectAllowed = "move";
+                          e.dataTransfer.setData("text/plain", "row");
+                        }}
+                        onDragEnd={() => {
+                          setRowDrag(null);
+                          setRowDragOver(null);
+                        }}
+                        title="ドラッグして並べ替え"
+                        className="cursor-grab select-none leading-none text-slate-300 hover:text-slate-500 active:cursor-grabbing"
+                      >
+                        ⠿
+                      </span>
+                      <span>
+                        <span className="font-medium">{site}</span>
+                        <span className="ml-1 text-slate-500">
+                          {req.shift_type}
+                          {req.start && req.end && (
+                            <span className="ml-1 font-mono text-[11px] text-slate-500">
+                              {req.start}–{req.end}
+                            </span>
+                          )}
+                          <span className="ml-1">{req.count}名</span>
+                        </span>
+                        <span className="ml-1 text-slate-400">（{reqDaysLabel(req)}）</span>
+                      </span>
+                    </div>
                   </td>
                   {days.map((day) => {
                     const date = `${year}-${pad(month)}-${pad(day)}`;
