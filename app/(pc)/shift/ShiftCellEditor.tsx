@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   SHIFT_PRESETS,
   SHIFT_TYPES,
+  STAFFING_SHIFT_TYPES,
   type Shift,
   type ShiftFormValues,
   type ShiftType,
@@ -61,15 +62,30 @@ export default function ShiftCellEditor({
   const update = (key: keyof ShiftFormValues, value: string) =>
     setForm((prev) => ({ ...prev, [key]: value }));
 
-  // 勤務区分を選ぶと既定の時刻を補完する
+  // 選択中の現場の必要人数（登録済みの勤務区分・時刻）
+  const currentSiteReqs = useMemo(
+    () => sites.find((s) => s.name === form.location)?.requirements ?? [],
+    [sites, form.location]
+  );
+
+  // 選べる勤務区分＝現場マスタに登録された区分＋休/明休（現場未選択時は全勤務区分）。
+  const availableTypes = useMemo(() => {
+    const workTypes =
+      currentSiteReqs.length > 0
+        ? currentSiteReqs.map((r) => r.shift_type)
+        : [...STAFFING_SHIFT_TYPES];
+    const base = new Set<ShiftType>([...workTypes, "休", "明休"]);
+    // 既存の値がリストに無くても表示できるよう保持
+    if (form.shift_type) base.add(form.shift_type as ShiftType);
+    return SHIFT_TYPES.filter((t) => base.has(t));
+  }, [currentSiteReqs, form.shift_type]);
+
+  // 勤務区分を選ぶと、その現場に登録された時刻（無ければ既定）を補完する
   const selectType = (type: ShiftType) => {
-    const preset = SHIFT_PRESETS[type];
-    setForm((prev) => ({
-      ...prev,
-      shift_type: type,
-      start_time: prev.start_time || preset.start,
-      end_time: prev.end_time || preset.end,
-    }));
+    const req = currentSiteReqs.find((r) => r.shift_type === type);
+    const start = req ? req.start : SHIFT_PRESETS[type].start;
+    const end = req ? req.end : SHIFT_PRESETS[type].end;
+    setForm((prev) => ({ ...prev, shift_type: type, start_time: start, end_time: end }));
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -110,7 +126,7 @@ export default function ShiftCellEditor({
       onClick={onClose}
     >
       <div
-        className="w-full max-w-md overflow-y-auto rounded-lg bg-white shadow-xl"
+        className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-lg bg-white shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
@@ -131,51 +147,8 @@ export default function ShiftCellEditor({
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4 px-6 py-5">
-          <div>
-            <span className="mb-1.5 block text-sm font-medium text-slate-700">
-              勤務区分<span className="ml-1 text-red-500">*</span>
-            </span>
-            <div className="flex flex-wrap gap-2">
-              {SHIFT_TYPES.map((t) => (
-                <button
-                  key={t}
-                  type="button"
-                  onClick={() => selectType(t)}
-                  className={`rounded-md px-3 py-2 text-sm font-medium transition ${
-                    form.shift_type === t
-                      ? "bg-slate-800 text-white"
-                      : "border border-slate-300 text-slate-600 hover:bg-slate-100"
-                  }`}
-                >
-                  {t}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <label className="block">
-              <span className="mb-1 block text-sm font-medium text-slate-700">開始</span>
-              <input
-                type="time"
-                value={form.start_time}
-                onChange={(e) => update("start_time", e.target.value)}
-                className={inputClass}
-              />
-            </label>
-            <label className="block">
-              <span className="mb-1 block text-sm font-medium text-slate-700">終了</span>
-              <input
-                type="time"
-                value={form.end_time}
-                onChange={(e) => update("end_time", e.target.value)}
-                className={inputClass}
-              />
-            </label>
-          </div>
-
           <label className="block">
-            <span className="mb-1 block text-sm font-medium text-slate-700">配置場所</span>
+            <span className="mb-1 block text-sm font-medium text-slate-700">配置場所（現場）</span>
             <select
               value={form.location}
               onChange={(e) => update("location", e.target.value)}
@@ -198,6 +171,54 @@ export default function ShiftCellEditor({
               </span>
             )}
           </label>
+
+          <div>
+            <span className="mb-1.5 block text-sm font-medium text-slate-700">
+              勤務区分<span className="ml-1 text-red-500">*</span>
+            </span>
+            <div className="flex flex-wrap gap-2">
+              {availableTypes.map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => selectType(t)}
+                  className={`rounded-md px-3 py-2 text-sm font-medium transition ${
+                    form.shift_type === t
+                      ? "bg-slate-800 text-white"
+                      : "border border-slate-300 text-slate-600 hover:bg-slate-100"
+                  }`}
+                >
+                  {t}
+                </button>
+              ))}
+            </div>
+            <span className="mt-1 block text-xs text-slate-400">
+              {currentSiteReqs.length > 0
+                ? "現場マスタに登録された区分から選べます（＋休・明休）。"
+                : "現場を選ぶと、その現場に登録された勤務区分が表示されます。"}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <label className="block">
+              <span className="mb-1 block text-sm font-medium text-slate-700">開始</span>
+              <input
+                type="time"
+                value={form.start_time}
+                onChange={(e) => update("start_time", e.target.value)}
+                className={inputClass}
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-sm font-medium text-slate-700">終了</span>
+              <input
+                type="time"
+                value={form.end_time}
+                onChange={(e) => update("end_time", e.target.value)}
+                className={inputClass}
+              />
+            </label>
+          </div>
 
           <label className="block">
             <span className="mb-1 block text-sm font-medium text-slate-700">備考</span>
