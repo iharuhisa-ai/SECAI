@@ -168,6 +168,79 @@ export async function POST(req: Request) {
     return `${d}(${WEEKDAY_LABELS[wd]}${holiday ? "・祝" : ""})`;
   }).join(" ");
 
+  // 「まだ不足している枠」を日付ごとにサーバー側で計算する。
+  // AIに生の既存一覧から充足を集計させるのは不正確なため、残り必要人数を明示的に渡す。
+  // existing には（管制員の手入力＋既に処理済みの他隊員の割当）が積み上がっているので、
+  // 隊員を1名ずつ処理していくと、この不足枠が順に埋まっていく（貪欲法）。
+  interface ReqSlot {
+    site: string;
+    shift_type: string;
+    start: string;
+    end: string;
+    count: number;
+    days?: number[];
+  }
+  const allSlots: ReqSlot[] = [];
+  for (const site of sites) {
+    for (const r of site.requirements ?? []) {
+      allSlots.push({
+        site: site.name,
+        shift_type: r.shift_type,
+        start: normTime(r.start),
+        end: normTime(r.end),
+        count: r.count,
+        days: r.days,
+      });
+    }
+  }
+  // 同一(現場×区分)に時間帯枠が2つ以上あるか（充足の数え方を切り替える）
+  const slotCountByLocType = new Map<string, number>();
+  for (const sl of allSlots) {
+    const k = `${sl.site}|${sl.shift_type}`;
+    slotCountByLocType.set(k, (slotCountByLocType.get(k) ?? 0) + 1);
+  }
+  const isMultiSlot = (site: string, type: string) =>
+    (slotCountByLocType.get(`${site}|${type}`) ?? 0) > 1;
+
+  // 既存割当の配置人数を (日×現場×区分) と (日×現場×区分×時間帯) で索引
+  const exByTypeDay = new Map<string, number>();
+  const exByBandDay = new Map<string, number>();
+  for (const e of existing) {
+    if (!e.shift_type || !e.location) continue;
+    const tk = `${e.day}|${e.location}|${e.shift_type}`;
+    exByTypeDay.set(tk, (exByTypeDay.get(tk) ?? 0) + 1);
+    const bk = `${tk}|${normTime(e.start)}|${normTime(e.end)}`;
+    exByBandDay.set(bk, (exByBandDay.get(bk) ?? 0) + 1);
+  }
+  // 枠が指定曜日に適用されるか（祝日は日曜=0扱い）
+  const slotApplies = (days: number[] | undefined, weekday: number, isHoliday: boolean) => {
+    if (!days || days.length === 0 || days.length === 7) return true;
+    return days.includes(isHoliday ? 0 : weekday);
+  };
+
+  const deficitLines: string[] = [];
+  for (let d = 1; d <= daysInMonth; d++) {
+    const wd = new Date(year, month - 1, d).getDay();
+    const dateKey = `${year}-${String(month).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+    const isHol = holidays.has(dateKey);
+    const parts: string[] = [];
+    for (const sl of allSlots) {
+      if (!slotApplies(sl.days, wd, isHol)) continue;
+      const assigned = isMultiSlot(sl.site, sl.shift_type)
+        ? exByBandDay.get(`${d}|${sl.site}|${sl.shift_type}|${sl.start}|${sl.end}`) ?? 0
+        : exByTypeDay.get(`${d}|${sl.site}|${sl.shift_type}`) ?? 0;
+      const remaining = sl.count - assigned;
+      if (remaining > 0)
+        parts.push(`${sl.site} ${sl.shift_type}(${sl.start}-${sl.end}) 残${remaining}名`);
+    }
+    if (parts.length > 0)
+      deficitLines.push(`${d}(${WEEKDAY_LABELS[wd]}${isHol ? "・祝" : ""}): ${parts.join(" / ")}`);
+  }
+  const deficitText =
+    deficitLines.length > 0
+      ? deficitLines.join("\n")
+      : "（現時点で不足している枠はありません。過剰配置を避け、休や既存の充足維持を優先してください。）";
+
   const system = `あなたは警備会社の管制員を補助するシフト作成アシスタントです。
 与えられた隊員について、${year}年${month}月（1日〜${daysInMonth}日）の月次シフトを作成します。
 
@@ -193,10 +266,13 @@ export async function POST(req: Request) {
 4. 連続勤務は確定済みも通算して最大5日まで。それを超える前に休を入れる。
 5. 各隊員に週あたり1〜2日程度の休を確保し、負担が偏らないようにする。
 
-現場の必要人数と配置（重要）:
+現場の必要人数と配置（最重要・充足を最優先）:
 - 勤務する隊員（休・明休以外）には、必ず配置現場(location)を「現場の必要人数」に挙がった現場名のいずれかで割り当てる。
 - 休・明休の日は location・start・end をすべて空文字("")にする。
-- 各日・各現場について、その現場の各勤務区分の必要人数をできるだけ満たすように配置する（例: 本社ビルが日勤2名なら、その日に日勤かつ本社ビル配置の隊員が2名になるよう割り当てる）。「確定済み」で既にその現場・区分に入っている人数も充足数に数える。
+- ユーザープロンプトに **「まだ不足している枠（残り人数）」を日付ごとに提示する**。これは既に確定済み・処理済みの他隊員の割当を差し引いた「今この隊員で埋めるべき残り」である。
+- **各勤務日には、その日に不足している枠のいずれか1つ（残り人数の多い枠を優先）を埋めることを最優先**に配置する（location と時間帯を一致させる）。1日に割り当てられる勤務は1つなので、その日の最も不足している枠から埋める。
+- **その日の不足枠がすべて0（充足済み）なら、無理に勤務させず「休」にする**（過剰配置を避け、週休・連続勤務のバランスを取る）。
+- 不足枠を埋めることと、下記の連続勤務・明休・週休のルールは両立させる（例: 連続5日を超えそうなら休を入れ、その分の枠は他隊員に委ねる）。
 
 時間帯(start・end)の扱い（重要）:
 - 勤務する隊員には、配置現場の「必要人数」に挙がった時間帯(◯◯-◯◯)のいずれかを start・end として必ず出力する（例: 日勤(08:00-20:00) の枠に入れるなら start="08:00" end="20:00"）。
@@ -219,12 +295,12 @@ ${staffLines}
 
 ${
   siteReqLines
-    ? `現場の必要人数（[ ]内は適用曜日。該当曜日のみ満たす。location はこの現場名を使う）:\n${siteReqLines}\n\n当月の各日の曜日:\n${weekdayMap}`
+    ? `現場の必要人数（[ ]内は適用曜日。該当曜日のみ満たす。location はこの現場名を使う）:\n${siteReqLines}\n\n当月の各日の曜日:\n${weekdayMap}\n\nまだ不足している枠（この隊員で優先的に埋める。既に処理済みの人数を差し引いた残り必要人数。各勤務日は残りの多い枠から埋める）:\n${deficitText}`
     : "（必要人数が設定された現場はありません。location は空文字にしてください。）"
 }
 ${constraints && constraints.trim() ? `\n管制員からの追加条件:\n${constraints.trim()}` : ""}
 
-各隊員の「確定済み(変更不可)」と現場の必要人数を踏まえ、それ以外の空いている日のシフト（勤務区分＋配置現場）を作成してください。`;
+「確定済み(変更不可)」と「まだ不足している枠」を踏まえ、空いている日のシフト（勤務区分＋配置現場＋時間帯）を作成してください。不足している枠を埋めることを最優先し、その日の枠が充足済みなら休にしてください。`;
 
   try {
     const text = await geminiGenerate({
