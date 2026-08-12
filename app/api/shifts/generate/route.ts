@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { SHIFT_TYPES } from "@/app/lib/types";
 import { geminiGenerate, isGeminiConfigured } from "@/app/lib/gemini";
 import { WEEKDAY_LABELS, daysLabel } from "@/app/lib/requirement";
+import { japaneseHolidays } from "@/app/lib/holidays";
 
 export const runtime = "nodejs";
 
@@ -137,11 +138,14 @@ export async function POST(req: Request) {
     .filter((s) => s.requirements && s.requirements.length > 0)
     .map((s) => s.name);
 
-  // 当月の各日の曜日（AIが曜日別の必要人数を判断するため）
+  // 当月の各日の曜日と祝日（AIが曜日別の必要人数を判断するため）
+  const holidays = japaneseHolidays(year);
   const weekdayMap = Array.from({ length: daysInMonth }, (_, idx) => {
     const d = idx + 1;
     const wd = new Date(year, month - 1, d).getDay();
-    return `${d}(${WEEKDAY_LABELS[wd]})`;
+    const dateKey = `${year}-${String(month).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+    const holiday = holidays.has(dateKey);
+    return `${d}(${WEEKDAY_LABELS[wd]}${holiday ? "・祝" : ""})`;
   }).join(" ");
 
   const system = `あなたは警備会社の管制員を補助するシフト作成アシスタントです。
@@ -174,6 +178,7 @@ export async function POST(req: Request) {
 - 休・明休の日は location を空文字("")にする。
 - 各日・各現場について、その現場の各勤務区分の必要人数をできるだけ満たすように配置する（例: 本社ビルが日勤2名なら、その日に日勤かつ本社ビル配置の隊員が2名になるよう割り当てる）。「確定済み」で既にその現場・区分に入っている人数も充足数に数える。
 - **必要人数には適用曜日がある**（[毎日]/[平日]/[土日]/[個別曜日]）。その枠は該当曜日のみ必要人数を満たせばよく、対象外の曜日はその枠の必要人数を0として扱う。
+- **祝日（「・祝」付きの日）は日曜と同じ扱い**にする。「土日」枠には祝日も含め、「平日」枠には祝日を含めない。
 - 隊員数が全現場の必要人数の合計に満たない日は、無理に勤務を増やさず、主要な現場（必要人数の多い現場）を優先して充足させる。
 - 必要人数を超える過剰配置は避け、余力は他現場の充足や休に回す。
 

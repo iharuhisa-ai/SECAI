@@ -14,6 +14,7 @@ import {
   type Staff,
 } from "@/app/lib/types";
 import { reqAppliesToDay, reqDaysLabel } from "@/app/lib/requirement";
+import { japaneseHolidays } from "@/app/lib/holidays";
 import ShiftCellEditor from "./ShiftCellEditor";
 import AiShiftModal, { type AiShift } from "./AiShiftModal";
 
@@ -77,6 +78,9 @@ export default function ShiftPage() {
     () => Array.from({ length: daysInMonth }, (_, i) => i + 1),
     [daysInMonth]
   );
+
+  // 当月の祝日
+  const holidays = useMemo(() => japaneseHolidays(year), [year]);
 
   // 月初の範囲（YYYY-MM-DD）
   const monthStart = `${year}-${pad(month)}-01`;
@@ -535,18 +539,24 @@ export default function ShiftPage() {
                 隊員
               </th>
               {days.map((day) => {
+                const date = `${year}-${pad(month)}-${pad(day)}`;
                 const weekday = new Date(year, month - 1, day).getDay();
+                const holiday = holidays.get(date);
                 const isSun = weekday === 0;
                 const isSat = weekday === 6;
                 return (
                   <th
                     key={day}
+                    title={holiday ?? undefined}
                     className={`border-b border-slate-200 px-1 py-1 text-center font-medium ${
                       viewMode === "time" ? "min-w-[3.5rem]" : "min-w-[2.5rem]"
-                    } ${isSun ? "text-red-500" : isSat ? "text-sky-500" : ""}`}
+                    } ${holiday || isSun ? "text-red-500" : isSat ? "text-sky-500" : ""}`}
                   >
                     <div>{day}</div>
-                    <div className="text-[10px]">{WEEKDAYS[weekday]}</div>
+                    <div className="text-[10px]">
+                      {WEEKDAYS[weekday]}
+                      {holiday && <span className="ml-0.5 text-red-400">祝</span>}
+                    </div>
                   </th>
                 );
               })}
@@ -672,7 +682,7 @@ export default function ShiftPage() {
                   {days.map((day) => {
                     const date = `${year}-${pad(month)}-${pad(day)}`;
                     const weekday = new Date(year, month - 1, day).getDay();
-                    const applies = reqAppliesToDay(req, weekday);
+                    const applies = reqAppliesToDay(req, weekday, holidays.has(date));
                     const assigned =
                       coverageMap.get(`${date}|${site}|${req.shift_type}`) ?? 0;
                     // 対象外の曜日は必要人数0扱い（過剰のみ黄、通常はグレー）

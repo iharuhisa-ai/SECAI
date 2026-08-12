@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMobile } from "../MobileContext";
 import { isSupabaseConfigured, supabase } from "@/app/lib/supabase";
 import { generateSampleShifts } from "@/app/lib/sampleShifts";
+import { holidayName } from "@/app/lib/holidays";
 import { SHIFT_PRESETS, type Shift } from "@/app/lib/types";
 
 function pad(n: number) {
@@ -68,6 +69,7 @@ export default function MobileShift() {
           {myShifts.map((s) => {
             const d = new Date(`${s.date}T00:00:00`);
             const wd = d.getDay();
+            const holiday = holidayName(s.date);
             const preset = s.shift_type ? SHIFT_PRESETS[s.shift_type] : null;
             const isToday = s.date === TODAY;
             return (
@@ -80,12 +82,19 @@ export default function MobileShift() {
                 <div className="w-12 shrink-0 text-center">
                   <div
                     className={`text-lg font-bold ${
-                      wd === 0 ? "text-red-500" : wd === 6 ? "text-sky-500" : "text-slate-800"
+                      holiday || wd === 0
+                        ? "text-red-500"
+                        : wd === 6
+                          ? "text-sky-500"
+                          : "text-slate-800"
                     }`}
                   >
                     {d.getDate()}
                   </div>
-                  <div className="text-[11px] text-slate-400">{WEEKDAYS[wd]}</div>
+                  <div className="text-[11px] text-slate-400">
+                    {WEEKDAYS[wd]}
+                    {holiday && <span className="ml-0.5 text-red-400">祝</span>}
+                  </div>
                 </div>
                 <span
                   className={`rounded px-2 py-1 text-sm font-bold ${preset?.cell ?? "text-slate-500"}`}

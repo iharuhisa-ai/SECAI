@@ -3,11 +3,17 @@ import type { SiteRequirement } from "./types";
 export const WEEKDAY_LABELS = ["日", "月", "火", "水", "木", "金", "土"];
 export const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
 
-// この必要人数が指定曜日（0=日〜6=土）に適用されるか
-export function reqAppliesToDay(req: SiteRequirement, weekday: number): boolean {
+// この必要人数が指定曜日（0=日〜6=土）に適用されるか。
+// 祝日は日曜(0)扱い＝「土日」枠に含める／「平日」枠から除外する。
+export function reqAppliesToDay(
+  req: SiteRequirement,
+  weekday: number,
+  isHoliday = false
+): boolean {
   const d = req.days;
   if (!d || d.length === 0 || d.length === 7) return true; // 毎日
-  return d.includes(weekday);
+  const eff = isHoliday ? 0 : weekday;
+  return d.includes(eff);
 }
 
 // 適用曜日の表示ラベル（毎日 / 平日 / 土日 / 個別）
