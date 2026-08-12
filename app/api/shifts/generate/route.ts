@@ -45,6 +45,8 @@ interface GenerateBody {
   existing?: ExistingShift[]; // 既に入力済みのシフト（区分付き・上書きしない／続きを踏まえる）
   sites?: SiteInput[]; // 現場マスタ（必要人数）
   constraints?: string; // 管制員が入力する追加条件（自由記述）
+  totalStaff?: number; // 今回のバッチで生成する隊員の総数（出勤日数の均等化に使用）
+  staffIndex?: number; // この隊員が何番目に処理されるか（0始まり）
 }
 
 // Gemini 構造化出力スキーマ（responseSchema 形式・型は大文字）
@@ -90,7 +92,17 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "リクエストの解析に失敗しました。" }, { status: 400 });
   }
 
-  const { year, month, daysInMonth, staff, existing = [], sites = [], constraints } = body;
+  const {
+    year,
+    month,
+    daysInMonth,
+    staff,
+    existing = [],
+    sites = [],
+    constraints,
+    totalStaff = 1,
+    staffIndex = 0,
+  } = body;
   if (!year || !month || !daysInMonth || !Array.isArray(staff) || staff.length === 0) {
     return NextResponse.json(
       { error: "年・月・日数・隊員一覧は必須です。" },
@@ -219,6 +231,7 @@ export async function POST(req: Request) {
   };
 
   const deficitLines: string[] = [];
+  let remainingDeficitTotal = 0; // 残り必要人数の総計（出勤日数の均等化に使用）
   for (let d = 1; d <= daysInMonth; d++) {
     const wd = new Date(year, month - 1, d).getDay();
     const dateKey = `${year}-${String(month).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
@@ -230,8 +243,10 @@ export async function POST(req: Request) {
         ? exByBandDay.get(`${d}|${sl.site}|${sl.shift_type}|${sl.start}|${sl.end}`) ?? 0
         : exByTypeDay.get(`${d}|${sl.site}|${sl.shift_type}`) ?? 0;
       const remaining = sl.count - assigned;
-      if (remaining > 0)
+      if (remaining > 0) {
+        remainingDeficitTotal += remaining;
         parts.push(`${sl.site} ${sl.shift_type}(${sl.start}-${sl.end}) 残${remaining}名`);
+      }
     }
     if (parts.length > 0)
       deficitLines.push(`${d}(${WEEKDAY_LABELS[wd]}${isHol ? "・祝" : ""}): ${parts.join(" / ")}`);
@@ -240,6 +255,14 @@ export async function POST(req: Request) {
     deficitLines.length > 0
       ? deficitLines.join("\n")
       : "（現時点で不足している枠はありません。過剰配置を避け、休や既存の充足維持を優先してください。）";
+
+  // 出勤日数の均等化: 残りの必要人数を「まだ処理していない隊員数」で割り、
+  // この隊員の目安勤務シフト数（日勤/夜勤/受付/半日の合計）を算出する。
+  // 先に処理される隊員が勤務を独占しないよう、公平な取り分に抑える。
+  const remainingStaff = Math.max(1, totalStaff - staffIndex);
+  const fairShare = Math.round(remainingDeficitTotal / remainingStaff);
+  // 週休を確保できるよう上限を設ける（最低でも月4日程度は休にできる余地を残す）。
+  const targetWorkShifts = Math.max(0, Math.min(fairShare, daysInMonth - 4));
 
   const system = `あなたは警備会社の管制員を補助するシフト作成アシスタントです。
 与えられた隊員について、${year}年${month}月（1日〜${daysInMonth}日）の月次シフトを作成します。
@@ -284,6 +307,15 @@ export async function POST(req: Request) {
 - 隊員数が全現場の必要人数の合計に満たない日は、無理に勤務を増やさず、主要な現場（必要人数の多い現場）を優先して充足させる。
 - 必要人数を超える過剰配置は避け、余力は他現場の充足や休に回す。
 
+出勤日数・休日日数の均等化（重要）:
+- 各隊員の出勤日数・休日日数が隊員間でなるべく揃うようにする。特定の隊員に勤務や休みが偏らないようにする。
+- ユーザープロンプトで「この隊員の目安の勤務シフト数」を提示する。これは（残りの必要人数 ÷ まだ処理していない隊員数）で算出した公平な取り分である。
+- **この隊員の勤務シフト数（日勤+夜勤+受付+半日の合計。休・明休は含めない）が、目安の数に近くなるように**する。目安を大きく超えて勤務させない（超える分は他の隊員に委ねて休にする）。逆に不足枠が残っているのに目安より大幅に少なくしない。
+
+日勤・夜勤の均等化（重要）:
+- 「出勤希望」がある隊員（例: 日勤希望／夜勤専従など）はその希望を最優先する。
+- **特に希望のない隊員は、日勤と夜勤の回数がなるべく均等になるように**割り当てる（片方に偏らせない）。夜勤には必ず翌日の明休をセットで付ける。
+
 隊員ごとの希望・区分の扱い:
 - 「休日希望」の日はできる限り「休」にする。
 - 「出勤希望」（日勤希望・夜勤可など）を尊重する。
@@ -298,9 +330,11 @@ ${
     ? `現場の必要人数（[ ]内は適用曜日。該当曜日のみ満たす。location はこの現場名を使う）:\n${siteReqLines}\n\n当月の各日の曜日:\n${weekdayMap}\n\nまだ不足している枠（この隊員で優先的に埋める。既に処理済みの人数を差し引いた残り必要人数。各勤務日は残りの多い枠から埋める）:\n${deficitText}`
     : "（必要人数が設定された現場はありません。location は空文字にしてください。）"
 }
+
+この隊員の目安の勤務シフト数（日勤+夜勤+受付+半日の合計。休・明休は含めない）: 約${targetWorkShifts}回
 ${constraints && constraints.trim() ? `\n管制員からの追加条件:\n${constraints.trim()}` : ""}
 
-「確定済み(変更不可)」と「まだ不足している枠」を踏まえ、空いている日のシフト（勤務区分＋配置現場＋時間帯）を作成してください。不足している枠を埋めることを最優先し、その日の枠が充足済みなら休にしてください。`;
+「確定済み(変更不可)」と「まだ不足している枠」を踏まえ、空いている日のシフト（勤務区分＋配置現場＋時間帯）を作成してください。不足している枠を埋めることを最優先しつつ、この隊員の勤務シフト数が目安（約${targetWorkShifts}回）に近くなるようにし、その日の枠が充足済み、または目安に達したら休にしてください。特に希望のない隊員は日勤と夜勤の回数を均等にしてください。`;
 
   try {
     const text = await geminiGenerate({

@@ -132,6 +132,8 @@ export default function AiShiftModal({
             existing: accumExisting,
             sites: siteReqs,
             constraints,
+            totalStaff: selected.length,
+            staffIndex: i,
           }),
         });
         const gen = data.shifts ?? [];
