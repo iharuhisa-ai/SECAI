@@ -20,9 +20,13 @@ CREATE TABLE IF NOT EXISTS staff (
   address VARCHAR(255),
   qualifications TEXT[],
   rank VARCHAR(20),                       -- 新人 / 一般 / ベテラン / 隊長
-  days_off_preference TEXT,               -- 休日希望日
-  work_preference TEXT,                   -- 出勤希望
+  days_off_preference TEXT,               -- 休日希望日（自由記述・補助）
+  work_preference TEXT,                   -- 出勤希望（自由記述・補助）
   incompatible_staff_ids TEXT[],          -- 組めない隊員（staff.id の配列）
+  available_shift_types TEXT[],           -- 対応可能な勤務区分（空/NULL=全区分可）
+  fixed_off_weekdays INTEGER[],           -- 固定休の曜日（0=日〜6=土）
+  shift_lean VARCHAR(10),                 -- 勤務帯の優先（day / night / both）
+  max_work_days INTEGER,                  -- 月の勤務日数の上限（NULL=上限なし）
   join_date DATE,
   leave_date DATE,                        -- NULL = 在籍中
   created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -100,6 +104,10 @@ ALTER TABLE staff ADD COLUMN IF NOT EXISTS rank VARCHAR(20);
 ALTER TABLE staff ADD COLUMN IF NOT EXISTS days_off_preference TEXT;
 ALTER TABLE staff ADD COLUMN IF NOT EXISTS work_preference TEXT;
 ALTER TABLE staff ADD COLUMN IF NOT EXISTS incompatible_staff_ids TEXT[];
+ALTER TABLE staff ADD COLUMN IF NOT EXISTS available_shift_types TEXT[];
+ALTER TABLE staff ADD COLUMN IF NOT EXISTS fixed_off_weekdays INTEGER[];
+ALTER TABLE staff ADD COLUMN IF NOT EXISTS shift_lean VARCHAR(10);
+ALTER TABLE staff ADD COLUMN IF NOT EXISTS max_work_days INTEGER;
 
 ALTER TABLE sites ADD COLUMN IF NOT EXISTS address VARCHAR(255);
 ALTER TABLE sites ADD COLUMN IF NOT EXISTS note TEXT;

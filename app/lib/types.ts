@@ -6,6 +6,18 @@ export type EmploymentType = (typeof EMPLOYMENT_TYPES)[number];
 export const STAFF_RANKS = ["新人", "一般", "ベテラン", "隊長"] as const;
 export type StaffRank = (typeof STAFF_RANKS)[number];
 
+// 勤務帯の優先（日勤も夜勤もできる隊員の傾向）。シフト作成の判断に使う。
+export const SHIFT_LEANS = ["day", "night", "both"] as const;
+export type ShiftLean = (typeof SHIFT_LEANS)[number];
+export const SHIFT_LEAN_LABELS: Record<ShiftLean, string> = {
+  day: "日勤優先",
+  night: "夜勤優先",
+  both: "どちらでも",
+};
+
+// 曜日ラベル（固定休の曜日選択などに使用。0=日〜6=土）
+export const WEEKDAY_LABELS = ["日", "月", "火", "水", "木", "金", "土"] as const;
+
 // 隊員（staff テーブル）
 export interface Staff {
   id: string;
@@ -18,9 +30,14 @@ export interface Staff {
   address: string | null;
   qualifications: string[] | null;
   rank: StaffRank | null; // 区分（新人/一般/ベテラン/隊長）
-  days_off_preference: string | null; // 休日希望日（例: 毎週日曜、第2土曜）
-  work_preference: string | null; // 出勤希望（例: 日勤希望、夜勤可）
+  days_off_preference: string | null; // 休日希望日（自由記述・補助）
+  work_preference: string | null; // 出勤希望（自由記述・補助）
   incompatible_staff_ids: string[] | null; // 組めない隊員（staff.id の配列）
+  // --- シフト作成用の構造化フィールド（未設定=null で後方互換） ---
+  available_shift_types: ShiftType[] | null; // 対応可能な勤務区分（空/null=全区分可）
+  fixed_off_weekdays: number[] | null; // 固定休の曜日（0=日〜6=土）
+  shift_lean: ShiftLean | null; // 勤務帯の優先（日勤/夜勤/どちらでも）
+  max_work_days: number | null; // 月の勤務日数の上限（null=上限なし）
   join_date: string | null; // YYYY-MM-DD
   leave_date: string | null; // NULL = 在籍中
   created_at: string;
@@ -41,6 +58,10 @@ export interface StaffFormValues {
   days_off_preference: string;
   work_preference: string;
   incompatible_staff_ids: string[];
+  available_shift_types: ShiftType[];
+  fixed_off_weekdays: number[];
+  shift_lean: ShiftLean | "";
+  max_work_days: string; // 入力は文字列、保存時に数値へ変換
   join_date: string;
 }
 

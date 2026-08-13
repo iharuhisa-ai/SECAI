@@ -35,6 +35,17 @@ function toRecord(values: StaffFormValues) {
     work_preference: values.work_preference.trim() || null,
     incompatible_staff_ids:
       values.incompatible_staff_ids.length > 0 ? values.incompatible_staff_ids : null,
+    available_shift_types:
+      values.available_shift_types.length > 0 ? values.available_shift_types : null,
+    fixed_off_weekdays:
+      values.fixed_off_weekdays.length > 0
+        ? [...values.fixed_off_weekdays].sort((a, b) => a - b)
+        : null,
+    shift_lean: values.shift_lean || null,
+    max_work_days:
+      values.max_work_days.trim() !== "" && Number.isFinite(Number(values.max_work_days))
+        ? Math.max(0, Math.min(31, Math.round(Number(values.max_work_days))))
+        : null,
     join_date: values.join_date || null,
   };
 }
@@ -212,6 +223,10 @@ export default function StaffPage() {
           days_off_preference: null,
           work_preference: null,
           incompatible_staff_ids: null,
+          available_shift_types: null,
+          fixed_off_weekdays: null,
+          shift_lean: null,
+          max_work_days: null,
           id: `demo-import-${Date.now()}-${i}`,
           leave_date: null,
           created_at: now,

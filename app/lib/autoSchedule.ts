@@ -56,6 +56,46 @@ function parseOffWeekdays(pref?: string | null): Set<number> {
   return set;
 }
 
+// 隊員のシフト作成用の能力・希望を、構造化フィールド優先＋自由記述フォールバックで確定する。
+interface Caps {
+  canDo: (t: ShiftType) => boolean; // 対応可能な勤務区分
+  receptionCapable: boolean; // 受付を担当できるか
+  lean: "day" | "night" | "both"; // 勤務帯の優先
+  offHard: Set<number>; // 固定休の曜日（原則休み）
+  offSoft: Set<number>; // 休日希望（自由記述・弱め）
+  maxWork: number | null; // 月の勤務日数上限
+}
+function computeCaps(staff: Staff): Caps {
+  const avail = staff.available_shift_types;
+  const availSet = Array.isArray(avail) && avail.length > 0 ? new Set(avail) : null;
+  const wp = parseWorkPref(staff.work_preference);
+
+  // 対応可能区分。構造化があればそれを、無ければ自由記述の「のみ/不可」を反映。
+  const canDo = (t: ShiftType): boolean => {
+    if (availSet) return availSet.has(t);
+    if (wp.dayOnly && t === "夜勤") return false;
+    if (wp.nightOnly && t !== "夜勤") return false;
+    return true;
+  };
+  const receptionCapable = availSet ? availSet.has("受付") : wp.reception;
+
+  // 勤務帯の優先
+  let lean: "day" | "night" | "both" = "both";
+  if (staff.shift_lean) lean = staff.shift_lean;
+  else if (availSet) {
+    const canDay = DAY_WORK.some((t) => availSet.has(t));
+    const canNight = availSet.has("夜勤");
+    lean = canDay && !canNight ? "day" : canNight && !canDay ? "night" : "both";
+  } else if (wp.dayPref || wp.dayOnly) lean = "day";
+  else if (wp.nightPref || wp.nightOnly) lean = "night";
+
+  const offHard = new Set(staff.fixed_off_weekdays ?? []);
+  const offSoft = offHard.size > 0 ? new Set<number>() : parseOffWeekdays(staff.days_off_preference);
+  const maxWork = typeof staff.max_work_days === "number" ? staff.max_work_days : null;
+
+  return { canDo, receptionCapable, lean, offHard, offSoft, maxWork };
+}
+
 interface DayAssign {
   type: ShiftType;
   site: string | null;
@@ -70,8 +110,7 @@ interface StaffState {
   dayCnt: number;
   nightCnt: number;
   akeCnt: number; // 明休の数（稼働日数の均等化＝休日の均等化に使う）
-  pref: ReturnType<typeof parseWorkPref>;
-  offWd: Set<number>;
+  caps: Caps;
 }
 interface Position {
   site: string;
@@ -111,8 +150,7 @@ export function autoSchedule(params: {
     dayCnt: 0,
     nightCnt: 0,
     akeCnt: 0,
-    pref: parseWorkPref(s.work_preference),
-    offWd: parseOffWeekdays(s.days_off_preference),
+    caps: computeCaps(s),
   }));
   const stById = new Map(states.map((st) => [st.staff.id, st]));
 
@@ -164,6 +202,10 @@ export function autoSchedule(params: {
     return c;
   };
 
+  // 受付担当（受付に対応可能な隊員）が1人でもいれば、受付はその人だけに割り当てる。
+  // （担当がいない場合は誰でも可＝従来動作にフォールバック）
+  const anyReceptionist = states.some((st) => st.caps.receptionCapable);
+
   const out: AutoShift[] = [];
 
   for (let day = 1; day <= daysInMonth; day++) {
@@ -185,13 +227,11 @@ export function autoSchedule(params: {
           positions.push({ site: site.name, shift_type: r.shift_type, start, end, daily });
       }
     }
-    // 夜勤（明休を伴い制約が強い）を先に、次に毎日枠（土日含めカバーが難しい）を埋める
-    positions.sort((a, b) => {
-      const an = isNightWork(a.shift_type) ? 0 : 1;
-      const bn = isNightWork(b.shift_type) ? 0 : 1;
-      if (an !== bn) return an - bn;
-      return a.daily === b.daily ? 0 : a.daily ? -1 : 1;
-    });
+    // 充当順: 受付（担当が限られ最優先）→ 夜勤（明休を伴い制約が強い）
+    //        → 毎日枠（土日含めカバーが難しい）→ 平日の日勤枠
+    const rank = (p: Position) =>
+      p.shift_type === "受付" ? 0 : isNightWork(p.shift_type) ? 1 : p.daily ? 2 : 3;
+    positions.sort((a, b) => rank(a) - rank(b));
 
     for (const pos of positions) {
       let best: StaffState | null = null;
@@ -199,6 +239,11 @@ export function autoSchedule(params: {
       for (const st of states) {
         if (st.byDay.has(day)) continue; // 既存・割当済み
         if (st.forcedRest.has(day)) continue; // 明休
+        if (!st.caps.canDo(pos.shift_type)) continue; // 対応不可の区分
+        // 受付は受付担当だけに限定（担当が存在する場合）
+        if (pos.shift_type === "受付" && anyReceptionist && !st.caps.receptionCapable) continue;
+        // 月の勤務日数の上限に達していたら休ませる
+        if (st.caps.maxWork != null && st.workDays >= st.caps.maxWork) continue;
         if (consecutiveBefore(st, day) >= MAX_CONSECUTIVE) continue; // 連続勤務上限
         // 夜勤は翌日に明休を置ける必要がある
         if (isNightWork(pos.shift_type) && day + 1 <= daysInMonth) {
@@ -234,18 +279,21 @@ export function autoSchedule(params: {
         // → 夜勤も日勤も皆で分け合うため、明休・休日も自然に均等になる。
         let score = (isNightWork(pos.shift_type) ? st.nightCnt : st.dayCnt) * 100;
         score += st.workDays * 5;
-        const p = st.pref;
+        const c = st.caps;
+        // 勤務帯の優先（能力は canDo で担保済み。ここは同点時の傾向調整）
         if (isNightWork(pos.shift_type)) {
-          if (p.dayOnly) score += 100000; // 日勤のみ→原則夜勤なし（他に居なければ許容）
-          else if (p.dayPref) score += 200; // 日勤希望→夜勤は避けめ
-          if (p.nightOnly || p.nightPref) score -= 100;
+          if (c.lean === "day") score += 200; // 日勤優先→夜勤は避けめ
+          else if (c.lean === "night") score -= 100;
         } else {
-          if (p.nightOnly) score += 100000;
-          else if (p.nightPref) score += 200;
-          if (p.dayOnly || p.dayPref) score -= 100;
-          if (pos.shift_type === "受付" && p.reception) score -= 50;
+          if (c.lean === "night") score += 200;
+          else if (c.lean === "day") score -= 100;
+          // 受付担当は受付枠を最優先で確保
+          if (pos.shift_type === "受付" && c.receptionCapable) score -= 1000;
         }
-        if (st.offWd.has(isHol ? 0 : weekday)) score += 500; // 休日希望の曜日は避ける
+        // 固定休の曜日は原則避ける／休日希望は弱めに避ける（祝日は日曜扱い）
+        const eff = isHol ? 0 : weekday;
+        if (c.offHard.has(eff)) score += 100000;
+        else if (c.offSoft.has(eff)) score += 500;
         if (score < bestScore) {
           bestScore = score;
           best = st;

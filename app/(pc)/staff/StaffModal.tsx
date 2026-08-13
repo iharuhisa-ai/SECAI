@@ -3,7 +3,12 @@
 import { useEffect, useState } from "react";
 import {
   EMPLOYMENT_TYPES,
+  SHIFT_LEAN_LABELS,
+  SHIFT_LEANS,
   STAFF_RANKS,
+  STAFFING_SHIFT_TYPES,
+  WEEKDAY_LABELS,
+  type ShiftType,
   type Staff,
   type StaffFormValues,
 } from "@/app/lib/types";
@@ -30,6 +35,10 @@ const emptyForm: StaffFormValues = {
   days_off_preference: "",
   work_preference: "",
   incompatible_staff_ids: [],
+  available_shift_types: [],
+  fixed_off_weekdays: [],
+  shift_lean: "",
+  max_work_days: "",
   join_date: "",
 };
 
@@ -47,6 +56,10 @@ function toFormValues(staff: Staff): StaffFormValues {
     days_off_preference: staff.days_off_preference ?? "",
     work_preference: staff.work_preference ?? "",
     incompatible_staff_ids: staff.incompatible_staff_ids ?? [],
+    available_shift_types: staff.available_shift_types ?? [],
+    fixed_off_weekdays: staff.fixed_off_weekdays ?? [],
+    shift_lean: staff.shift_lean ?? "",
+    max_work_days: staff.max_work_days != null ? String(staff.max_work_days) : "",
     join_date: staff.join_date ?? "",
   };
 }
@@ -72,6 +85,24 @@ export default function StaffModal({ target, allStaff, onClose, onSubmit }: Staf
       incompatible_staff_ids: prev.incompatible_staff_ids.includes(id)
         ? prev.incompatible_staff_ids.filter((x) => x !== id)
         : [...prev.incompatible_staff_ids, id],
+    }));
+
+  // 「対応可能な勤務区分」のトグル
+  const toggleShiftType = (t: ShiftType) =>
+    setForm((prev) => ({
+      ...prev,
+      available_shift_types: prev.available_shift_types.includes(t)
+        ? prev.available_shift_types.filter((x) => x !== t)
+        : [...prev.available_shift_types, t],
+    }));
+
+  // 「固定休の曜日」のトグル
+  const toggleOffWeekday = (wd: number) =>
+    setForm((prev) => ({
+      ...prev,
+      fixed_off_weekdays: prev.fixed_off_weekdays.includes(wd)
+        ? prev.fixed_off_weekdays.filter((x) => x !== wd)
+        : [...prev.fixed_off_weekdays, wd],
     }));
 
   // 自分以外の在籍隊員（組めない隊員の候補）
@@ -223,8 +254,37 @@ export default function StaffModal({ target, allStaff, onClose, onSubmit }: Staf
 
           <div className="border-t border-slate-200 pt-4">
             <p className="mb-3 text-xs font-medium text-slate-500">
-              シフト作成用の情報（AIシフト作成で考慮されます）
+              シフト作成用の情報（自動シフト作成で使用します）
             </p>
+
+            {/* 対応可能な勤務区分 */}
+            <div className="mb-4">
+              <span className="mb-1.5 block text-sm font-medium text-slate-700">
+                対応可能な勤務区分
+              </span>
+              <div className="flex flex-wrap gap-2">
+                {STAFFING_SHIFT_TYPES.map((t) => {
+                  const on = form.available_shift_types.includes(t);
+                  return (
+                    <button
+                      key={t}
+                      type="button"
+                      onClick={() => toggleShiftType(t)}
+                      className={`rounded-md px-3 py-1.5 text-sm font-medium transition ${
+                        on
+                          ? "bg-slate-800 text-white"
+                          : "border border-slate-300 text-slate-600 hover:bg-slate-100"
+                      }`}
+                    >
+                      {t}
+                    </button>
+                  );
+                })}
+              </div>
+              <span className="mt-1 block text-xs text-slate-400">
+                未選択なら全区分に対応可。「受付」を選んだ隊員だけが受付に入ります。
+              </span>
+            </div>
 
             <div className="grid grid-cols-2 gap-4">
               <Field label="区分">
@@ -242,25 +302,82 @@ export default function StaffModal({ target, allStaff, onClose, onSubmit }: Staf
                 </select>
               </Field>
 
-              <Field label="休日希望日">
+              <Field label="勤務帯の優先">
+                <select
+                  value={form.shift_lean}
+                  onChange={(e) => update("shift_lean", e.target.value)}
+                  className={inputClass}
+                >
+                  <option value="">未設定（どちらでも）</option>
+                  {SHIFT_LEANS.map((l) => (
+                    <option key={l} value={l}>
+                      {SHIFT_LEAN_LABELS[l]}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            </div>
+
+            {/* 固定休の曜日 */}
+            <div className="mt-4">
+              <span className="mb-1.5 block text-sm font-medium text-slate-700">固定休の曜日</span>
+              <div className="flex flex-wrap gap-1.5">
+                {WEEKDAY_LABELS.map((label, wd) => {
+                  const on = form.fixed_off_weekdays.includes(wd);
+                  const color = wd === 0 ? "text-red-500" : wd === 6 ? "text-sky-500" : "";
+                  return (
+                    <button
+                      key={wd}
+                      type="button"
+                      onClick={() => toggleOffWeekday(wd)}
+                      className={`h-9 w-9 rounded-md text-sm font-medium transition ${
+                        on
+                          ? "bg-slate-800 text-white"
+                          : `border border-slate-300 hover:bg-slate-100 ${color}`
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+              <span className="mt-1 block text-xs text-slate-400">
+                選んだ曜日は原則休みにします（祝日は日曜扱い）。
+              </span>
+            </div>
+
+            <div className="mt-4">
+              <Field label="月の勤務日数の上限（任意）">
+                <input
+                  type="number"
+                  min={0}
+                  max={31}
+                  value={form.max_work_days}
+                  onChange={(e) => update("max_work_days", e.target.value)}
+                  className={inputClass}
+                  placeholder="例: 20（パート等。空欄＝上限なし）"
+                />
+              </Field>
+            </div>
+
+            {/* 自由記述（補助メモ） */}
+            <div className="mt-4 grid grid-cols-2 gap-4">
+              <Field label="休日希望（メモ・任意）">
                 <input
                   type="text"
                   value={form.days_off_preference}
                   onChange={(e) => update("days_off_preference", e.target.value)}
                   className={inputClass}
-                  placeholder="毎週日曜、第2土曜"
+                  placeholder="第2土曜 など"
                 />
               </Field>
-            </div>
-
-            <div className="mt-4">
-              <Field label="出勤希望">
+              <Field label="出勤希望（メモ・任意）">
                 <input
                   type="text"
                   value={form.work_preference}
                   onChange={(e) => update("work_preference", e.target.value)}
                   className={inputClass}
-                  placeholder="日勤希望、夜勤可 など"
+                  placeholder="補足があれば"
                 />
               </Field>
             </div>
