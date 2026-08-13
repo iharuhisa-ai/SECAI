@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { autoSchedule } from "@/app/lib/autoSchedule";
+import { requestJson } from "@/app/lib/apiClient";
 import type { Shift, ShiftType, Site, Staff } from "@/app/lib/types";
 
 export interface AiShift {
@@ -41,6 +42,10 @@ export default function AiShiftModal({
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AiShift[] | null>(null);
   const [applying, setApplying] = useState(false);
+  // Phase 2: 自由記述条件の AI 微調整
+  const [conditions, setConditions] = useState("");
+  const [adjusting, setAdjusting] = useState(false);
+  const [adjustMsg, setAdjustMsg] = useState<string | null>(null);
 
   // 各隊員の「既に入力済みの日」
   const filledByStaff = useMemo(() => {
@@ -77,6 +82,7 @@ export default function AiShiftModal({
       return;
     }
     setError(null);
+    setAdjustMsg(null);
     const selectedSet = new Set(selectedIds);
     const selected = staff.filter((s) => selectedIds.includes(s.id));
     const existingForSel = shifts.filter(
@@ -94,6 +100,61 @@ export default function AiShiftModal({
       setResult(base);
     } catch (err) {
       setError(err instanceof Error ? err.message : "シフト作成に失敗しました。");
+    }
+  };
+
+  // Phase 2: 土台に対して自由記述条件を AI で反映（充足が悪化する変更はサーバー側で破棄）
+  const adjust = async () => {
+    if (!result) return;
+    if (!conditions.trim()) {
+      setAdjustMsg("追加条件を入力してください。");
+      return;
+    }
+    setAdjusting(true);
+    setAdjustMsg(null);
+    setError(null);
+    try {
+      const selectedSet = new Set(selectedIds);
+      const existingCells = shifts
+        .filter((sh) => sh.shift_type && selectedSet.has(sh.staff_id))
+        .map((sh) => ({
+          staff_id: sh.staff_id,
+          day: Number(sh.date.slice(8, 10)),
+          shift_type: sh.shift_type as string,
+          location: sh.location ?? null,
+          start: (sh.start_time ?? "").slice(0, 5) || null,
+          end: (sh.end_time ?? "").slice(0, 5) || null,
+        }));
+      const siteReqs = sites
+        .filter((s) => s.requirements && s.requirements.length > 0)
+        .map((s) => ({ name: s.name, requirements: s.requirements }));
+      const staffInfo = staff
+        .filter((s) => selectedIds.includes(s.id))
+        .map((s) => ({ id: s.id, name: s.name, rank: s.rank }));
+      const data = await requestJson<{
+        shifts: AiShift[];
+        applied: number;
+        message?: string;
+      }>("/api/shifts/adjust", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          year,
+          month,
+          daysInMonth,
+          staff: staffInfo,
+          sites: siteReqs,
+          existing: existingCells,
+          base: result,
+          conditions,
+        }),
+      });
+      if (data.shifts) setResult(data.shifts);
+      setAdjustMsg(data.message ?? `${data.applied} 件を調整しました。`);
+    } catch (err) {
+      setAdjustMsg(err instanceof Error ? err.message : "AI微調整に失敗しました。");
+    } finally {
+      setAdjusting(false);
     }
   };
 
@@ -211,6 +272,37 @@ export default function AiShiftModal({
             <div className="mt-4 rounded-md border border-green-300 bg-green-50 px-4 py-3 text-sm text-green-800">
               <span className="font-medium">{result.length} 件</span>{" "}
               のシフト案を作成しました。「当月へ反映」を押すと、空いている日にのみ反映されます（既存は保持）。
+            </div>
+          )}
+
+          {/* Phase 2: 自由記述条件の AI 微調整 */}
+          {result && (
+            <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 px-4 py-3">
+              <span className="mb-1 block text-sm font-medium text-slate-700">
+                追加条件でAI微調整（任意）
+              </span>
+              <p className="mb-2 text-xs text-slate-500">
+                作成した案に対し、自由記述の条件をAIで反映します。充足（必要人数）が悪化する変更は自動で破棄され、土台の案を維持します。
+              </p>
+              <textarea
+                value={conditions}
+                onChange={(e) => setConditions(e.target.value)}
+                className="h-20 w-full resize-none rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
+                placeholder={"例:\n・20日は佐藤を休みに\n・月末は日勤を1名増やす"}
+              />
+              <button
+                type="button"
+                onClick={adjust}
+                disabled={adjusting || !conditions.trim()}
+                className="mt-2 w-full rounded-md border border-slate-800 px-4 py-2 text-sm font-medium text-slate-800 hover:bg-slate-800 hover:text-white disabled:opacity-50"
+              >
+                {adjusting ? "AIが微調整中..." : "✨ AIで微調整"}
+              </button>
+              {adjustMsg && (
+                <p className="mt-2 rounded-md bg-white px-3 py-2 text-xs text-slate-600">
+                  {adjustMsg}
+                </p>
+              )}
             </div>
           )}
         </div>
