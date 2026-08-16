@@ -232,7 +232,7 @@ export default function AiShiftModal({
           ) : (
           <>
           <p className="mb-3 text-sm text-slate-600">
-            勤務区分（日勤・夜勤・半日・休・明休）を、各隊員の区分・希望と
+            勤務区分を、各隊員の対応可能区分・希望と
             <span className="font-medium text-slate-700">現場の必要人数</span>
             を踏まえて作成し、勤務日には配置現場と
             <span className="font-medium text-slate-700">時間帯</span>
