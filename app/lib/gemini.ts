@@ -40,28 +40,41 @@ export async function geminiGenerate(opts: GenerateOptions): Promise<string> {
   )}`;
 
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-  // 429/500/502/503/504 は一時的（過負荷・レート超過）なので指数バックオフで再試行する。
+  // 429/500/502/503/504 は一時的（過負荷・レート超過）なので、
+  // 「全体のデッドライン内」でのみ指数バックオフ再試行する。
+  // サーバーレス関数の実行時間上限（Netlifyは概ね10秒）を超えないよう、
+  // 各呼び出しに AbortController でタイムアウトを付け、合計時間を必ず抑える。
   const RETRYABLE = new Set([429, 500, 502, 503, 504]);
-  const MAX_ATTEMPTS = 4;
-  let lastError: Error | null = null;
+  const DEADLINE_MS = Number(process.env.GEMINI_DEADLINE_MS) || 8500;
+  const OVERLOAD_MSG =
+    "AIが混雑しています（時間をおいて再度お試しください）。対象の隊員数を減らすと成功しやすくなります。";
+  const started = Date.now();
+  const remainingMs = () => DEADLINE_MS - (Date.now() - started);
 
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+  let attempt = 0;
+
+  while (remainingMs() > 1500) {
+    attempt++;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), remainingMs());
     let res: Response;
     try {
       res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
+        signal: controller.signal,
       });
     } catch {
-      // ネットワーク一時エラーも再試行
-      lastError = new Error("Gemini API への接続に失敗しました。");
-      if (attempt < MAX_ATTEMPTS) {
-        await sleep(400 * 2 ** (attempt - 1) + Math.random() * 300);
+      clearTimeout(timer);
+      // アボート（デッドライン到達）またはネットワーク一時エラー → 時間があれば再試行
+      if (remainingMs() > 2500) {
+        await sleep(500);
         continue;
       }
-      throw lastError;
+      break;
     }
+    clearTimeout(timer);
 
     const data = await res.json().catch(() => ({}));
 
@@ -69,18 +82,14 @@ export async function geminiGenerate(opts: GenerateOptions): Promise<string> {
       const rawMsg =
         (data as { error?: { message?: string } })?.error?.message ??
         `Gemini API エラー (${res.status})`;
-      if (RETRYABLE.has(res.status) && attempt < MAX_ATTEMPTS) {
-        lastError = new Error(rawMsg);
-        await sleep(600 * 2 ** (attempt - 1) + Math.random() * 400); // 0.6s,1.2s,2.4s(+jitter)
-        continue;
-      }
-      // 再試行しても過負荷なら分かりやすい日本語に置き換える
       if (RETRYABLE.has(res.status)) {
-        throw new Error(
-          "AIが混雑しています（時間をおいて再度お試しください）。対象の隊員数を減らすと成功しやすくなります。"
-        );
+        if (remainingMs() > 2500) {
+          await sleep(Math.min(600 * attempt, 1500) + Math.random() * 300);
+          continue;
+        }
+        throw new Error(OVERLOAD_MSG); // 時間切れ＝混雑扱い
       }
-      throw new Error(rawMsg);
+      throw new Error(rawMsg); // 恒久エラー（400系など）は即時
     }
 
     const cand = (data as {
@@ -103,5 +112,6 @@ export async function geminiGenerate(opts: GenerateOptions): Promise<string> {
     return text;
   }
 
-  throw lastError ?? new Error("Gemini API エラー");
+  // デッドライン到達（応答が得られず時間切れ）＝混雑扱い
+  throw new Error(OVERLOAD_MSG);
 }

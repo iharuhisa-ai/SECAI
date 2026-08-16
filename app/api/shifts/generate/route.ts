@@ -366,7 +366,7 @@ ${constraints && constraints.trim() ? `\n管制員からの追加条件:\n${cons
       system,
       prompt: userPrompt,
       jsonSchema: outputSchema,
-      maxOutputTokens: 8192,
+      maxOutputTokens: 3072, // 1隊員1か月分（〜31件）には十分。生成を軽くしタイムアウトを避ける
     });
 
     const parsed = JSON.parse(text) as {
