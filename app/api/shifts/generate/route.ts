@@ -366,10 +366,10 @@ ${constraints && constraints.trim() ? `\n管制員からの追加条件:\n${cons
       system,
       prompt: userPrompt,
       jsonSchema: outputSchema,
-      maxOutputTokens: 3072, // 1隊員1か月分（〜31件）には十分。生成を軽くしタイムアウトを避ける
+      maxOutputTokens: 8192, // 1隊員1か月分(staff_idはUUIDで1件〜100tok×31日)を切らないよう十分に確保
     });
 
-    const parsed = JSON.parse(text) as {
+    let parsed: {
       shifts: {
         staff_id: string;
         day: number;
@@ -379,6 +379,14 @@ ${constraints && constraints.trim() ? `\n管制員からの追加条件:\n${cons
         end?: string;
       }[];
     };
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      // 応答が途中で切れた等でJSONが壊れている場合
+      throw new Error(
+        "AIの応答を解析できませんでした（出力が途中で切れた可能性があります）。もう一度お試しください。対象の隊員数を減らすと安定します。"
+      );
+    }
 
     // 念のためサーバ側で妥当性チェック
     // （不正な staff_id / day を除外し、入力済みの日も上書きしないよう除外）
