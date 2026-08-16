@@ -65,8 +65,9 @@ export interface StaffFormValues {
   join_date: string;
 }
 
-// 勤務区分（shifts.shift_type / setup_guide.md の CHECK 制約と一致）
-export const SHIFT_TYPES = ["日勤", "夜勤", "受付", "半日", "休", "明休"] as const;
+// 勤務区分（shifts.shift_type / schema.sql の CHECK 制約と一致）
+// SV = スーパーバイザー（統括）
+export const SHIFT_TYPES = ["日勤", "夜勤", "受付", "半日", "SV", "休", "明休"] as const;
 export type ShiftType = (typeof SHIFT_TYPES)[number];
 
 // 勤務区分ごとの既定時刻と表示色（カレンダーのセル用）
@@ -78,6 +79,7 @@ export const SHIFT_PRESETS: Record<
   夜勤: { start: "20:00", end: "08:00", cell: "bg-indigo-100 text-indigo-800", badge: "bg-indigo-500" },
   受付: { start: "08:30", end: "17:30", cell: "bg-orange-100 text-orange-800", badge: "bg-orange-500" },
   半日: { start: "09:00", end: "13:00", cell: "bg-teal-100 text-teal-800", badge: "bg-teal-500" },
+  SV: { start: "09:00", end: "18:00", cell: "bg-purple-100 text-purple-800", badge: "bg-purple-500" },
   休: { start: "", end: "", cell: "bg-slate-100 text-slate-400", badge: "bg-slate-300" },
   明休: { start: "", end: "", cell: "bg-slate-100 text-slate-500", badge: "bg-slate-400" },
 };

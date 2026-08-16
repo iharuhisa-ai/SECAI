@@ -48,7 +48,7 @@ CREATE TABLE IF NOT EXISTS shifts (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   staff_id UUID REFERENCES staff(id) ON DELETE CASCADE,
   date DATE NOT NULL,
-  shift_type VARCHAR(20) CHECK (shift_type IN ('日勤', '夜勤', '受付', '半日', '休', '明休')),
+  shift_type VARCHAR(20) CHECK (shift_type IN ('日勤', '夜勤', '受付', '半日', 'SV', '休', '明休')),
   start_time TIME,
   end_time TIME,
   location VARCHAR(100),
@@ -119,10 +119,10 @@ ALTER TABLE reports DROP CONSTRAINT IF EXISTS reports_staff_id_fkey;
 ALTER TABLE reports ADD CONSTRAINT reports_staff_id_fkey
   FOREIGN KEY (staff_id) REFERENCES staff(id) ON DELETE SET NULL;
 
--- 勤務区分に「受付」を含める（既存の CHECK を貼り替え）
+-- 勤務区分に「受付」「SV」を含める（既存の CHECK を貼り替え）
 ALTER TABLE shifts DROP CONSTRAINT IF EXISTS shifts_shift_type_check;
 ALTER TABLE shifts ADD CONSTRAINT shifts_shift_type_check
-  CHECK (shift_type IN ('日勤', '夜勤', '受付', '半日', '休', '明休'));
+  CHECK (shift_type IN ('日勤', '夜勤', '受付', '半日', 'SV', '休', '明休'));
 
 -- ---------------------------------------------------------------------------
 -- 2. 認証: サインアップ時に profiles を自動作成（既定ロール=隊員）

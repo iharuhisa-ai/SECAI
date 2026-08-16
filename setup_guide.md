@@ -134,7 +134,7 @@ CREATE TABLE shifts (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   staff_id UUID REFERENCES staff(id) ON DELETE CASCADE,
   date DATE NOT NULL,
-  shift_type VARCHAR(20) CHECK (shift_type IN ('日勤', '夜勤', '受付', '半日', '休', '明休')),
+  shift_type VARCHAR(20) CHECK (shift_type IN ('日勤', '夜勤', '受付', '半日', 'SV', '休', '明休')),
   start_time TIME,
   end_time TIME,
   location VARCHAR(100),
@@ -186,7 +186,7 @@ INSERT INTO sites (name, address, note) VALUES
 > -- 勤務区分に「受付」を追加（既存の CHECK 制約を貼り替え）
 > ALTER TABLE shifts DROP CONSTRAINT IF EXISTS shifts_shift_type_check;
 > ALTER TABLE shifts ADD CONSTRAINT shifts_shift_type_check
->   CHECK (shift_type IN ('日勤', '夜勤', '受付', '半日', '休', '明休'));
+>   CHECK (shift_type IN ('日勤', '夜勤', '受付', '半日', 'SV', '休', '明休'));
 > CREATE TABLE IF NOT EXISTS sites (
 >   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
 >   name VARCHAR(100) NOT NULL,
