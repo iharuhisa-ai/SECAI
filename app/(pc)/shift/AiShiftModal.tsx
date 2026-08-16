@@ -1,7 +1,6 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { autoSchedule } from "@/app/lib/autoSchedule";
 import { requestJson } from "@/app/lib/apiClient";
 import type { Shift, ShiftType, Site, Staff } from "@/app/lib/types";
 
@@ -19,7 +18,7 @@ interface AiShiftModalProps {
   month: number;
   daysInMonth: number;
   staff: Staff[];
-  /** 当月の既存シフト（上書きしない判定・充足の起点に使用） */
+  /** 当月の既存シフト（上書きしない判定・AIへの通知に使用） */
   shifts: Shift[];
   /** 現場マスタ（必要人数の反映に使用） */
   sites: Site[];
@@ -39,13 +38,18 @@ export default function AiShiftModal({
   onApply,
 }: AiShiftModalProps) {
   const [selectedIds, setSelectedIds] = useState<string[]>(staff.map((s) => s.id));
+  const [constraints, setConstraints] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState<{ current: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AiShift[] | null>(null);
   const [applying, setApplying] = useState(false);
-  // Phase 2: 自由記述条件の AI 微調整
-  const [conditions, setConditions] = useState("");
-  const [adjusting, setAdjusting] = useState(false);
-  const [adjustMsg, setAdjustMsg] = useState<string | null>(null);
+
+  const nameById = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const s of staff) m.set(s.id, s.name);
+    return m;
+  }, [staff]);
 
   // 各隊員の「既に入力済みの日」
   const filledByStaff = useMemo(() => {
@@ -69,53 +73,28 @@ export default function AiShiftModal({
 
   const sitesWithReq = sites.filter((s) => s.requirements && s.requirements.length > 0).length;
 
-  // 決定論スケジューラで土台を作成（充足・出勤均等・日勤夜勤配分をアルゴリズムで保証）。
-  const generate = () => {
+  const generate = async () => {
     if (selectedIds.length === 0) {
       setError("作成対象の隊員を1名以上選択してください。");
       return;
     }
-    if (sitesWithReq === 0) {
-      setError(
-        "必要人数が設定された現場がありません。「設定（現場マスタ）」で登録してください。"
-      );
-      return;
-    }
+    setLoading(true);
     setError(null);
-    setAdjustMsg(null);
-    const selectedSet = new Set(selectedIds);
-    const selected = staff.filter((s) => selectedIds.includes(s.id));
-    const existingForSel = shifts.filter(
-      (sh) => sh.shift_type && selectedSet.has(sh.staff_id)
-    );
+    setResult(null);
+    setProgress(null);
     try {
-      const base = autoSchedule({
-        year,
-        month,
-        daysInMonth,
-        staff: selected,
-        sites,
-        existing: existingForSel,
-      });
-      setResult(base);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "シフト作成に失敗しました。");
-    }
-  };
-
-  // Phase 2: 土台に対して自由記述条件を AI で反映（充足が悪化する変更はサーバー側で破棄）
-  const adjust = async () => {
-    if (!result) return;
-    if (!conditions.trim()) {
-      setAdjustMsg("追加条件を入力してください。");
-      return;
-    }
-    setAdjusting(true);
-    setAdjustMsg(null);
-    setError(null);
-    try {
+      const selected = staff.filter((s) => selectedIds.includes(s.id));
       const selectedSet = new Set(selectedIds);
-      const existingCells = shifts
+
+      // 必要人数が設定された現場のみ渡す
+      const siteReqs = sites
+        .filter((s) => s.requirements && s.requirements.length > 0)
+        .map((s) => ({ name: s.name, requirements: s.requirements }));
+
+      // 既存シフト（区分・配置現場付き）を起点に、隊員ごとに逐次生成する。
+      // 1リクエスト＝1隊員に分割することで各リクエストをタイムアウト内に収める。
+      // 生成結果を都度 existing に積み増し、後続隊員が明休・連続勤務・配置を踏まえられるようにする。
+      const accumExisting = shifts
         .filter((sh) => sh.shift_type && selectedSet.has(sh.staff_id))
         .map((sh) => ({
           staff_id: sh.staff_id,
@@ -125,36 +104,62 @@ export default function AiShiftModal({
           start: (sh.start_time ?? "").slice(0, 5) || null,
           end: (sh.end_time ?? "").slice(0, 5) || null,
         }));
-      const siteReqs = sites
-        .filter((s) => s.requirements && s.requirements.length > 0)
-        .map((s) => ({ name: s.name, requirements: s.requirements }));
-      const staffInfo = staff
-        .filter((s) => selectedIds.includes(s.id))
-        .map((s) => ({ id: s.id, name: s.name, rank: s.rank }));
-      const data = await requestJson<{
-        shifts: AiShift[];
-        applied: number;
-        message?: string;
-      }>("/api/shifts/adjust", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          year,
-          month,
-          daysInMonth,
-          staff: staffInfo,
-          sites: siteReqs,
-          existing: existingCells,
-          base: result,
-          conditions,
-        }),
-      });
-      if (data.shifts) setResult(data.shifts);
-      setAdjustMsg(data.message ?? `${data.applied} 件を調整しました。`);
+
+      const allGenerated: AiShift[] = [];
+
+      for (let i = 0; i < selected.length; i++) {
+        const s = selected[i];
+        setProgress({ current: i + 1, total: selected.length });
+        const data = await requestJson<{ shifts: AiShift[] }>("/api/shifts/generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            year,
+            month,
+            daysInMonth,
+            staff: [
+              {
+                id: s.id,
+                name: s.name,
+                rank: s.rank,
+                days_off_preference: s.days_off_preference,
+                work_preference: s.work_preference,
+                incompatible_names: (s.incompatible_staff_ids ?? [])
+                  .map((id) => nameById.get(id))
+                  .filter((n): n is string => Boolean(n)),
+                available_shift_types: s.available_shift_types,
+                fixed_off_weekdays: s.fixed_off_weekdays,
+                shift_lean: s.shift_lean,
+                max_work_days: s.max_work_days,
+              },
+            ],
+            existing: accumExisting,
+            sites: siteReqs,
+            constraints,
+            totalStaff: selected.length,
+            staffIndex: i,
+          }),
+        });
+        const gen = data.shifts ?? [];
+        allGenerated.push(...gen);
+        for (const g of gen) {
+          accumExisting.push({
+            staff_id: g.staff_id,
+            day: g.day,
+            shift_type: g.shift_type,
+            location: g.location ?? null,
+            start: g.start ?? null,
+            end: g.end ?? null,
+          });
+        }
+      }
+
+      setResult(allGenerated);
     } catch (err) {
-      setAdjustMsg(err instanceof Error ? err.message : "AI微調整に失敗しました。");
+      setError(err instanceof Error ? err.message : "通信エラーが発生しました。");
     } finally {
-      setAdjusting(false);
+      setLoading(false);
+      setProgress(null);
     }
   };
 
@@ -197,13 +202,41 @@ export default function AiShiftModal({
         </div>
 
         <div className="flex-1 overflow-y-auto px-6 py-5">
+          {loading ? (
+            <div className="flex flex-col items-center justify-center gap-6 py-16 text-center">
+              <div className="relative flex h-20 w-20 items-center justify-center">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-indigo-400/25" />
+                <span className="absolute h-20 w-20 animate-spin rounded-full border-4 border-slate-200 border-t-indigo-600" />
+                <span className="text-3xl">✨</span>
+              </div>
+              <div>
+                <p className="text-base font-bold text-slate-800">AIがシフトを作成しています</p>
+                <p className="mt-1 text-sm text-slate-500">
+                  {progress ? `${progress.current} / ${progress.total} 名` : "準備中..."}
+                </p>
+              </div>
+              {progress && (
+                <div className="h-2 w-full max-w-xs overflow-hidden rounded-full bg-slate-100">
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-sky-500 to-indigo-600 transition-all duration-500"
+                    style={{
+                      width: `${Math.round(((progress.current - 1) / progress.total) * 100)}%`,
+                    }}
+                  />
+                </div>
+              )}
+              <p className="text-xs text-slate-400">
+                各隊員の勤務を順に組み立てています。しばらくお待ちください。
+              </p>
+            </div>
+          ) : (
+          <>
           <p className="mb-3 text-sm text-slate-600">
+            勤務区分（日勤・夜勤・半日・休・明休）を、各隊員の区分・希望と
             <span className="font-medium text-slate-700">現場の必要人数</span>
-            を土日を含めて毎日満たすように配置し、
-            <span className="font-medium text-slate-700">出勤日数の均等・日勤/夜勤の配分</span>
-            を自動計算します。各隊員の
-            <span className="font-medium text-slate-700">出勤希望・休日希望・区分</span>
-            も反映します（夜勤の翌日は明休、連続勤務は最大5日）。
+            を踏まえて作成し、勤務日には配置現場と
+            <span className="font-medium text-slate-700">時間帯</span>
+            を割り当てます（同じ区分でも時間帯ごとに必要人数を満たします）。
             <span className="font-medium text-slate-700">既に入力済みのシフトは上書きしません。</span>
             {sitesWithReq === 0 && (
               <span className="mt-1 block text-xs text-amber-700">
@@ -255,10 +288,21 @@ export default function AiShiftModal({
             </div>
           </div>
 
+          <label className="block">
+            <span className="mb-1 block text-sm font-medium text-slate-700">追加条件（任意）</span>
+            <textarea
+              value={constraints}
+              onChange={(e) => setConstraints(e.target.value)}
+              className="h-24 w-full resize-none rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
+              placeholder={"例:\n・土日は最低2名を日勤に配置\n・隊長は平日中心に"}
+            />
+          </label>
+
           {!result && (
             <button
               onClick={generate}
-              className="mt-2 w-full rounded-md bg-slate-800 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+              disabled={loading}
+              className="mt-4 w-full rounded-md bg-slate-800 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
             >
               シフトを作成する
             </button>
@@ -274,36 +318,7 @@ export default function AiShiftModal({
               のシフト案を作成しました。「当月へ反映」を押すと、空いている日にのみ反映されます（既存は保持）。
             </div>
           )}
-
-          {/* Phase 2: 自由記述条件の AI 微調整 */}
-          {result && (
-            <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 px-4 py-3">
-              <span className="mb-1 block text-sm font-medium text-slate-700">
-                追加条件でAI微調整（任意）
-              </span>
-              <p className="mb-2 text-xs text-slate-500">
-                作成した案に対し、自由記述の条件をAIで反映します。充足（必要人数）が悪化する変更は自動で破棄され、土台の案を維持します。
-              </p>
-              <textarea
-                value={conditions}
-                onChange={(e) => setConditions(e.target.value)}
-                className="h-20 w-full resize-none rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
-                placeholder={"例:\n・20日は佐藤を休みに\n・月末は日勤を1名増やす"}
-              />
-              <button
-                type="button"
-                onClick={adjust}
-                disabled={adjusting || !conditions.trim()}
-                className="mt-2 w-full rounded-md border border-slate-800 px-4 py-2 text-sm font-medium text-slate-800 hover:bg-slate-800 hover:text-white disabled:opacity-50"
-              >
-                {adjusting ? "AIが微調整中..." : "✨ AIで微調整"}
-              </button>
-              {adjustMsg && (
-                <p className="mt-2 rounded-md bg-white px-3 py-2 text-xs text-slate-600">
-                  {adjustMsg}
-                </p>
-              )}
-            </div>
+          </>
           )}
         </div>
 
@@ -312,7 +327,7 @@ export default function AiShiftModal({
             <button
               type="button"
               onClick={generate}
-              disabled={applying}
+              disabled={loading || applying}
               className="rounded-md border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
             >
               作り直す
