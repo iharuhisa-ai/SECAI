@@ -55,6 +55,8 @@ interface GenerateBody {
 }
 
 // Gemini 構造化出力スキーマ（responseSchema 形式・型は大文字）
+// 1リクエスト＝1隊員なので staff_id は出力させない（UUID×31日の無駄を削減し生成を軽くする）。
+// staff_id はサーバー側で対象隊員のIDを注入する。
 const outputSchema = {
   type: "OBJECT",
   properties: {
@@ -63,7 +65,6 @@ const outputSchema = {
       items: {
         type: "OBJECT",
         properties: {
-          staff_id: { type: "STRING" },
           day: { type: "INTEGER" },
           shift_type: { type: "STRING", enum: [...SHIFT_TYPES] },
           // 配置現場名。休・明休は空文字。
@@ -72,7 +73,7 @@ const outputSchema = {
           start: { type: "STRING" },
           end: { type: "STRING" },
         },
-        required: ["staff_id", "day", "shift_type", "location", "start", "end"],
+        required: ["day", "shift_type", "location", "start", "end"],
       },
     },
   },
@@ -158,7 +159,7 @@ export async function POST(req: Request) {
               })
               .join(", ")}`
           : "";
-      return `- ${s.name}（staff_id: ${s.id}）${attrText}${exText}`;
+      return `- ${s.name}${attrText}${exText}`;
     })
     .join("\n");
 
@@ -371,7 +372,6 @@ ${constraints && constraints.trim() ? `\n管制員からの追加条件:\n${cons
 
     let parsed: {
       shifts: {
-        staff_id: string;
         day: number;
         shift_type: string;
         location?: string;
@@ -388,17 +388,18 @@ ${constraints && constraints.trim() ? `\n管制員からの追加条件:\n${cons
       );
     }
 
-    // 念のためサーバ側で妥当性チェック
-    // （不正な staff_id / day を除外し、入力済みの日も上書きしないよう除外）
-    const validIds = new Set(staff.map((s) => s.id));
+    // 1リクエスト＝1隊員。対象隊員のIDはサーバー側で注入する。
+    const targetStaffId = staff[0].id;
+
+    // 念のためサーバ側で妥当性チェック（不正な day を除外し、入力済みの日も上書きしない）
     const shiftTypeSet = new Set<string>(SHIFT_TYPES);
     const siteNameSet = new Set(siteNames);
     const filledSet = new Set<string>();
     for (const e of existing) filledSet.add(`${e.staff_id}-${e.day}`);
-    const shifts = parsed.shifts
+    const shifts = (parsed.shifts ?? [])
+      .map((s) => ({ ...s, staff_id: targetStaffId }))
       .filter(
         (s) =>
-          validIds.has(s.staff_id) &&
           Number.isInteger(s.day) &&
           s.day >= 1 &&
           s.day <= daysInMonth &&
