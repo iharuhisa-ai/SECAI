@@ -25,8 +25,6 @@ export async function geminiGenerate(opts: GenerateOptions): Promise<string> {
   const generationConfig: Record<string, unknown> = {
     maxOutputTokens: opts.maxOutputTokens ?? 8192,
     temperature: 0.7,
-    // 思考モードを無効化（生成を速くしタイムアウトを防ぐ）。思考非対応モデルでは無視される。
-    thinkingConfig: { thinkingBudget: 0 },
   };
   if (opts.jsonSchema) {
     generationConfig.responseMimeType = "application/json";
