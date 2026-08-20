@@ -1,9 +1,9 @@
 // サーバー専用。Google Gemini API を REST で呼ぶ薄いヘルパー。
 // GEMINI_API_KEY は環境変数から読む（ハードコード禁止）。
-// 既定は高速な gemini-2.0-flash（思考モードなし）。ローリングエイリアス（gemini-flash-latest 等）は
-// 思考(reasoning)が既定ONの新しめのFlashを指すことがあり、生成が遅くタイムアウトしやすいため避ける。
-// 必要なら GEMINI_MODEL 環境変数で上書き（例: gemini-2.0-flash-lite / gemini-2.5-flash）。
-const MODEL = process.env.GEMINI_MODEL || "gemini-2.0-flash";
+// 既定は gemini-3.6-flash（gemini-2.0-flash は提供終了）。
+// 思考(reasoning)は生成を遅くしタイムアウトの原因になるため、下の thinkingConfig で無効化する。
+// 必要なら GEMINI_MODEL 環境変数で上書き。
+const MODEL = process.env.GEMINI_MODEL || "gemini-3.6-flash";
 
 export function isGeminiConfigured(): boolean {
   return Boolean(process.env.GEMINI_API_KEY);
@@ -25,6 +25,8 @@ export async function geminiGenerate(opts: GenerateOptions): Promise<string> {
   const generationConfig: Record<string, unknown> = {
     maxOutputTokens: opts.maxOutputTokens ?? 8192,
     temperature: 0.7,
+    // 思考モードを無効化（生成を速くしタイムアウトを防ぐ）。思考非対応モデルでは無視される。
+    thinkingConfig: { thinkingBudget: 0 },
   };
   if (opts.jsonSchema) {
     generationConfig.responseMimeType = "application/json";
