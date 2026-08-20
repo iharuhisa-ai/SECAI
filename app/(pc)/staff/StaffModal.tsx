@@ -39,6 +39,7 @@ const emptyForm: StaffFormValues = {
   fixed_off_weekdays: [],
   shift_lean: "",
   max_work_days: "",
+  fixed_shift_type: "",
   join_date: "",
 };
 
@@ -60,6 +61,7 @@ function toFormValues(staff: Staff): StaffFormValues {
     fixed_off_weekdays: staff.fixed_off_weekdays ?? [],
     shift_lean: staff.shift_lean ?? "",
     max_work_days: staff.max_work_days != null ? String(staff.max_work_days) : "",
+    fixed_shift_type: staff.fixed_shift_type ?? "",
     join_date: staff.join_date ?? "",
   };
 }
@@ -283,6 +285,26 @@ export default function StaffModal({ target, allStaff, onClose, onSubmit }: Staf
               </div>
               <span className="mt-1 block text-xs text-slate-400">
                 未選択なら全区分に対応可。「受付」を選んだ隊員だけが受付に入ります。
+              </span>
+            </div>
+
+            <div className="mb-4">
+              <Field label="固定配置する区分（任意）">
+                <select
+                  value={form.fixed_shift_type}
+                  onChange={(e) => update("fixed_shift_type", e.target.value)}
+                  className={inputClass}
+                >
+                  <option value="">未設定（AIで自動作成）</option>
+                  {STAFFING_SHIFT_TYPES.map((t) => (
+                    <option key={t} value={t}>
+                      {t}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <span className="mt-1 block text-xs text-slate-400">
+                設定すると、この隊員はAI作成の対象外になり、その区分の現場枠へ自動で固定配置されます（受付・SV等。適用外の日・固定休は休）。
               </span>
             </div>
 

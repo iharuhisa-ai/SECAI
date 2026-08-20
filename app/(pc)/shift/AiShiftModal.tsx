@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { requestJson } from "@/app/lib/apiClient";
+import { placeFixedStaff } from "@/app/lib/fixedPlacement";
 import type { Shift, ShiftType, Site, Staff } from "@/app/lib/types";
 
 export interface AiShift {
@@ -107,9 +108,33 @@ export default function AiShiftModal({
 
       const allGenerated: AiShift[] = [];
 
-      for (let i = 0; i < selected.length; i++) {
-        const s = selected[i];
-        setProgress({ current: i + 1, total: selected.length });
+      // 固定配置の隊員（fixed_shift_type 設定あり）は機械的に配置し、AI対象から除外する。
+      // 配置した勤務は充足に効かせるため accumExisting に積む。
+      const fixedStaff = selected.filter((s) => s.fixed_shift_type);
+      const aiStaff = selected.filter((s) => !s.fixed_shift_type);
+      for (const s of fixedStaff) {
+        const existingDays = new Set(
+          accumExisting.filter((e) => e.staff_id === s.id).map((e) => e.day)
+        );
+        const placed = placeFixedStaff({ staff: s, sites, year, month, daysInMonth, existingDays });
+        allGenerated.push(...placed);
+        for (const p of placed) {
+          if (p.shift_type !== "休" && p.shift_type !== "明休") {
+            accumExisting.push({
+              staff_id: p.staff_id,
+              day: p.day,
+              shift_type: p.shift_type,
+              location: p.location,
+              start: p.start,
+              end: p.end,
+            });
+          }
+        }
+      }
+
+      for (let i = 0; i < aiStaff.length; i++) {
+        const s = aiStaff[i];
+        setProgress({ current: i + 1, total: aiStaff.length });
         const data = await requestJson<{ shifts: AiShift[] }>("/api/shifts/generate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -136,7 +161,7 @@ export default function AiShiftModal({
             existing: accumExisting,
             sites: siteReqs,
             constraints,
-            totalStaff: selected.length,
+            totalStaff: aiStaff.length,
             staffIndex: i,
           }),
         });

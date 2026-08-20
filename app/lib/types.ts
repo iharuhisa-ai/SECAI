@@ -38,6 +38,9 @@ export interface Staff {
   fixed_off_weekdays: number[] | null; // 固定休の曜日（0=日〜6=土）
   shift_lean: ShiftLean | null; // 勤務帯の優先（日勤/夜勤/どちらでも）
   max_work_days: number | null; // 月の勤務日数の上限（null=上限なし）
+  // 固定配置する区分（例: 受付/SV）。設定するとAI生成の対象外になり、
+  // 対応する現場枠へ機械的に配置される（適用曜日=勤務・それ以外/固定休=休）。
+  fixed_shift_type: ShiftType | null;
   join_date: string | null; // YYYY-MM-DD
   leave_date: string | null; // NULL = 在籍中
   created_at: string;
@@ -62,6 +65,7 @@ export interface StaffFormValues {
   fixed_off_weekdays: number[];
   shift_lean: ShiftLean | "";
   max_work_days: string; // 入力は文字列、保存時に数値へ変換
+  fixed_shift_type: ShiftType | "";
   join_date: string;
 }
 

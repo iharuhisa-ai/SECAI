@@ -46,6 +46,7 @@ function toRecord(values: StaffFormValues) {
       values.max_work_days.trim() !== "" && Number.isFinite(Number(values.max_work_days))
         ? Math.max(0, Math.min(31, Math.round(Number(values.max_work_days))))
         : null,
+    fixed_shift_type: values.fixed_shift_type || null,
     join_date: values.join_date || null,
   };
 }
@@ -227,6 +228,7 @@ export default function StaffPage() {
           fixed_off_weekdays: null,
           shift_lean: null,
           max_work_days: null,
+          fixed_shift_type: null,
           id: `demo-import-${Date.now()}-${i}`,
           leave_date: null,
           created_at: now,

@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS staff (
   fixed_off_weekdays INTEGER[],           -- 固定休の曜日（0=日〜6=土）
   shift_lean VARCHAR(10),                 -- 勤務帯の優先（day / night / both）
   max_work_days INTEGER,                  -- 月の勤務日数の上限（NULL=上限なし）
+  fixed_shift_type VARCHAR(20),           -- 固定配置する区分（受付/SV等。設定でAI対象外＋自動配置）
   join_date DATE,
   leave_date DATE,                        -- NULL = 在籍中
   created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -108,6 +109,7 @@ ALTER TABLE staff ADD COLUMN IF NOT EXISTS available_shift_types TEXT[];
 ALTER TABLE staff ADD COLUMN IF NOT EXISTS fixed_off_weekdays INTEGER[];
 ALTER TABLE staff ADD COLUMN IF NOT EXISTS shift_lean VARCHAR(10);
 ALTER TABLE staff ADD COLUMN IF NOT EXISTS max_work_days INTEGER;
+ALTER TABLE staff ADD COLUMN IF NOT EXISTS fixed_shift_type VARCHAR(20);
 
 ALTER TABLE sites ADD COLUMN IF NOT EXISTS address VARCHAR(255);
 ALTER TABLE sites ADD COLUMN IF NOT EXISTS note TEXT;
