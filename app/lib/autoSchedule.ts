@@ -105,7 +105,6 @@ interface DayAssign {
 interface StaffState {
   staff: Staff;
   byDay: Map<number, DayAssign>;
-  forcedRest: Set<number>; // 明休を強制する日
   workDays: number;
   dayCnt: number;
   nightCnt: number;
@@ -145,7 +144,6 @@ export function autoSchedule(params: {
   const states: StaffState[] = staff.map((s) => ({
     staff: s,
     byDay: new Map(),
-    forcedRest: new Set(),
     workDays: 0,
     dayCnt: 0,
     nightCnt: 0,
@@ -172,7 +170,6 @@ export function autoSchedule(params: {
       if (isNightWork(t)) st.nightCnt++;
       else if (isDayWork(t)) st.dayCnt++;
     } else if (t === "明休") st.akeCnt++;
-    if (isNightWork(t) && day + 1 <= daysInMonth) st.forcedRest.add(day + 1);
   }
 
   const consecutiveBefore = (st: StaffState, day: number): number => {
@@ -183,6 +180,23 @@ export function autoSchedule(params: {
       else break;
     }
     return c;
+  };
+  // 直前日の割当
+  const prevOf = (st: StaffState, day: number): DayAssign | undefined =>
+    day > 1 ? st.byDay.get(day - 1) : undefined;
+  // 直前日までの「同区分の連勤」情報（3連勤ブロックの判定用）
+  const runInfo = (st: StaffState, day: number): { kind: "day" | "night" | null; len: number } => {
+    let kind: "day" | "night" | null = null;
+    let len = 0;
+    for (let d = day - 1; d >= 1; d--) {
+      const a = st.byDay.get(d);
+      if (!a || !isWork(a.type)) break;
+      const k: "day" | "night" = isNightWork(a.type) ? "night" : "day";
+      if (kind === null) kind = k;
+      else if (kind !== k) break;
+      len++;
+    }
+    return { kind, len };
   };
   const assignedForSlot = (
     day: number,
@@ -236,20 +250,23 @@ export function autoSchedule(params: {
     for (const pos of positions) {
       let best: StaffState | null = null;
       let bestScore = Infinity;
+      const posNight = isNightWork(pos.shift_type);
+      const posKind: "day" | "night" = posNight ? "night" : "day";
       for (const st of states) {
         if (st.byDay.has(day)) continue; // 既存・割当済み
-        if (st.forcedRest.has(day)) continue; // 明休
         if (!st.caps.canDo(pos.shift_type)) continue; // 対応不可の区分
         // 受付は受付担当だけに限定（担当が存在する場合）
         if (pos.shift_type === "受付" && anyReceptionist && !st.caps.receptionCapable) continue;
         // 月の勤務日数の上限に達していたら休ませる
         if (st.caps.maxWork != null && st.workDays >= st.caps.maxWork) continue;
         if (consecutiveBefore(st, day) >= MAX_CONSECUTIVE) continue; // 連続勤務上限
-        // 夜勤は翌日に明休を置ける必要がある
-        if (isNightWork(pos.shift_type) && day + 1 <= daysInMonth) {
-          const nd = st.byDay.get(day + 1);
-          if (nd && isWork(nd.type)) continue;
-        }
+        // 夜勤の翌日は日勤系に入れない（＝夜勤の継続 or 明休のみ。明休は下の休補完で付与）
+        const prev = prevOf(st, day);
+        const prevNight = !!prev && isNightWork(prev.type);
+        if (prevNight && !posNight) continue;
+
+        // 3連勤ブロックの情報
+        const run = runInfo(st, day);
         // 組めない隊員が同じ枠に入っていないか
         const incompat = st.staff.incompatible_staff_ids ?? [];
         if (incompat.length) {
@@ -279,6 +296,16 @@ export function autoSchedule(params: {
         // → 夜勤も日勤も皆で分け合うため、明休・休日も自然に均等になる。
         let score = (isNightWork(pos.shift_type) ? st.nightCnt : st.dayCnt) * 100;
         score += st.workDays * 5;
+        // 3連勤ブロックのバイアス:
+        // 同区分の連勤が1〜2日 → 継続を強く優先（3連勤にそろえる）
+        // 同区分の連勤が3日以上 → 休/明休へ（それ以上の継続は避ける）
+        // 別区分の連勤中（休なしの切替）→ 避ける
+        if (run.kind === posKind) {
+          if (run.len >= 3) score += 600;
+          else score -= 500;
+        } else if (run.kind !== null) {
+          score += 400;
+        }
         const c = st.caps;
         // 勤務帯の優先（能力は canDo で担保済み。ここは同点時の傾向調整）
         if (isNightWork(pos.shift_type)) {
@@ -317,13 +344,13 @@ export function autoSchedule(params: {
         start: pos.start,
         end: pos.end,
       });
-      if (isNightWork(pos.shift_type) && day + 1 <= daysInMonth) best.forcedRest.add(day + 1);
     }
 
-    // 残りの隊員: 明休（強制）または休
+    // 残りの隊員: 夜勤の翌日で勤務が付かなければ明休、それ以外は休
     for (const st of states) {
       if (st.byDay.has(day)) continue;
-      if (st.forcedRest.has(day)) {
+      const prev = prevOf(st, day);
+      if (prev && isNightWork(prev.type)) {
         st.byDay.set(day, { type: "明休", site: null, start: null, end: null });
         st.akeCnt++;
         out.push({ staff_id: st.staff.id, day, shift_type: "明休", location: null, start: null, end: null });
