@@ -132,54 +132,68 @@ export default function AiShiftModal({
         }
       }
 
+      // AI失敗が固定配置を巻き込まないよう、1隊員ごとにエラーを捕捉する。
+      // どこかで失敗しても、固定配置＋成功した隊員分は result に残して反映できるようにする。
+      let aiError: string | null = null;
       for (let i = 0; i < aiStaff.length; i++) {
         const s = aiStaff[i];
         setProgress({ current: i + 1, total: aiStaff.length });
-        const data = await requestJson<{ shifts: AiShift[] }>("/api/shifts/generate", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            year,
-            month,
-            daysInMonth,
-            staff: [
-              {
-                id: s.id,
-                name: s.name,
-                rank: s.rank,
-                days_off_preference: s.days_off_preference,
-                work_preference: s.work_preference,
-                incompatible_names: (s.incompatible_staff_ids ?? [])
-                  .map((id) => nameById.get(id))
-                  .filter((n): n is string => Boolean(n)),
-                available_shift_types: s.available_shift_types,
-                fixed_off_weekdays: s.fixed_off_weekdays,
-                shift_lean: s.shift_lean,
-                max_work_days: s.max_work_days,
-              },
-            ],
-            existing: accumExisting,
-            sites: siteReqs,
-            constraints,
-            totalStaff: aiStaff.length,
-            staffIndex: i,
-          }),
-        });
-        const gen = data.shifts ?? [];
-        allGenerated.push(...gen);
-        for (const g of gen) {
-          accumExisting.push({
-            staff_id: g.staff_id,
-            day: g.day,
-            shift_type: g.shift_type,
-            location: g.location ?? null,
-            start: g.start ?? null,
-            end: g.end ?? null,
+        try {
+          const data = await requestJson<{ shifts: AiShift[] }>("/api/shifts/generate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              year,
+              month,
+              daysInMonth,
+              staff: [
+                {
+                  id: s.id,
+                  name: s.name,
+                  rank: s.rank,
+                  days_off_preference: s.days_off_preference,
+                  work_preference: s.work_preference,
+                  incompatible_names: (s.incompatible_staff_ids ?? [])
+                    .map((id) => nameById.get(id))
+                    .filter((n): n is string => Boolean(n)),
+                  available_shift_types: s.available_shift_types,
+                  fixed_off_weekdays: s.fixed_off_weekdays,
+                  shift_lean: s.shift_lean,
+                  max_work_days: s.max_work_days,
+                },
+              ],
+              existing: accumExisting,
+              sites: siteReqs,
+              constraints,
+              totalStaff: aiStaff.length,
+              staffIndex: i,
+            }),
           });
+          const gen = data.shifts ?? [];
+          allGenerated.push(...gen);
+          for (const g of gen) {
+            accumExisting.push({
+              staff_id: g.staff_id,
+              day: g.day,
+              shift_type: g.shift_type,
+              location: g.location ?? null,
+              start: g.start ?? null,
+              end: g.end ?? null,
+            });
+          }
+        } catch (e) {
+          aiError = e instanceof Error ? e.message : "通信エラーが発生しました。";
+          break; // 失敗したら以降のAI生成は止める（固定配置＋成功分は保持）
         }
       }
 
+      // 固定配置＋成功した隊員分は常に反映できるようにする
       setResult(allGenerated);
+      if (aiError) {
+        setError(
+          `一部の隊員でAI作成に失敗しました（固定配置と成功した分は「当月へ反映」で反映できます）: ${aiError}`
+        );
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "通信エラーが発生しました。");
     } finally {

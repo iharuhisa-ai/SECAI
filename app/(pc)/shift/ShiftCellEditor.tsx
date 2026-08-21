@@ -102,6 +102,12 @@ export default function ShiftCellEditor({
       setError("勤務区分を選択してください。");
       return;
     }
+    // 勤務区分（休・明休以外）は現場が必須。現場が無いと充足状況にカウントされないため。
+    const isWork = form.shift_type !== "休" && form.shift_type !== "明休";
+    if (isWork && !form.location.trim()) {
+      setError("配置場所（現場）を選択してください。勤務は現場を設定しないと充足状況に反映されません。");
+      return;
+    }
     setSaving(true);
     try {
       await onSubmit(form);
